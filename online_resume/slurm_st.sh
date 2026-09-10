@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=e4g5sc4r4st1
 #SBATCH --partition=faculty
-#SBATCH --account=test-acc
+#SBATCH --account=faculty-acc
 #SBATCH --qos=stqos
 #SBATCH --nodes=1
 #SBATCH --ntasks=4
@@ -60,5 +60,4 @@ print("strict_exact178_panels=398 stable_scan_sec=12 explicit_fp32=1 amp=0 fa3=0
 PY
 printf 'job_id=%s training_lineage=177623,180825 groups=1 shards=4 gpus=4 strict=398 explicit_fp32=1 complete=1
 '   "${SLURM_JOB_ID}" >"${JOB_ROOT}/job.complete"
-
 

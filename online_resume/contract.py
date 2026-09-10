@@ -14,7 +14,7 @@ LOG=ROOT/"logs"/TAG
 RECEIPT=STAGE/"submission_state.json"
 SPECS={
  "gtqos":{"qos":"gtqos","job_name":"e4g5sc4r8gt1","account":"faculty-acc","nodes":2,"gpus":8,"group_count":2,"time_limit":"3-00:00:00","slurm_file":"slurm_gt.sh"},
- "stqos":{"qos":"stqos","job_name":"e4g5sc4r4st1","account":"test-acc","nodes":1,"gpus":4,"group_count":1,"time_limit":"1-00:00:00","slurm_file":"slurm_st.sh"},
+ "stqos":{"qos":"stqos","job_name":"e4g5sc4r4st1","account":"faculty-acc","nodes":1,"gpus":4,"group_count":1,"time_limit":"1-00:00:00","slurm_file":"slurm_st.sh"},
 }
 
 def registered_jobs():
@@ -45,4 +45,3 @@ def runtime_check():
     print("registered_loop4_evaluator=1 qos="+spec["qos"]+" job="+os.environ["SLURM_JOB_ID"],flush=True)
 
 if __name__=="__main__": runtime_check()
-

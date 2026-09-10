@@ -88,7 +88,7 @@ class Tests(unittest.TestCase):
                 with self.assertRaises(AssertionError):contract.registered_jobs()
     def test_slurm_resources_and_independent_allocation_locks(self):
         root=Path(__file__).parent
-        for kind,tasks,nodes,days,qos,account in (("gt",8,2,3,"gtqos","faculty-acc"),("st",4,1,1,"stqos","test-acc")):
+        for kind,tasks,nodes,days,qos,account in (("gt",8,2,3,"gtqos","faculty-acc"),("st",4,1,1,"stqos","faculty-acc")):
             text=(root/f"slurm_{kind}.sh").read_text()
             for token in (f"--qos={qos}",f"--account={account}",f"--nodes={nodes}",f"--ntasks={tasks}","--ntasks-per-node=4","--gpus-per-task=1","--cpus-per-task=4","--mem=120G",f"--time={days}-00:00:00","--nice=0","--no-requeue","--gpu-bind=single:1"):
                 self.assertIn(token,text)
