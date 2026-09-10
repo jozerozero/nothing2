@@ -1,10 +1,3 @@
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LC_ALL = "C.UTF-8",
-	LC_CTYPE = "C.UTF-8",
-	LANG = "C.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to the standard locale ("C").
 f500758e0c1e7eb3015da2afad0139d393628dc14f8255b4d3bc97cdd94bb58a  contract.py
 ea60c56dd2c6bdf09a299632c237b3061b37c76b64efc9cc1181c938751c02c0  deploy_submit.py
 8cff68ec4edb3df455662669e0435168ed5a3cd3a50ac7b3a55e1fd46d9bd46b  gpu_shard_group_scheduler_stage1.py
@@ -12,4 +5,4 @@ ea60c56dd2c6bdf09a299632c237b3061b37c76b64efc9cc1181c938751c02c0  deploy_submit.
 7789913c4e920b629f3e5fe15e559222ea56205a23da9caf854c94423a3910e3  run_group_worker.sh
 ddf2d0b1c579dec2872d30655694794ab5be27db6da74e06c733d51658be202d  slurm_gt.sh
 2e6bc2281e9d763ae98c76bd59155fec9e37c300204234d120d89fe188af46e5  slurm_st.sh
-7bc2d76cf53d7f433f64ac542afe88048d3ef2d94bdd681e9f8a7705811f506b  test_resume.py
+1c227c74d4b2dc9d63321af1e60fe91e0bcbd4204bfce603d7737b1c55168c31  test_resume.py

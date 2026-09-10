@@ -15,6 +15,15 @@ def worker_claim(root,index,q):
         q.put(s.claim_checkpoint(a,index,0))
 
 class Tests(unittest.TestCase):
+    def test_source_manifest(self):
+        import hashlib,re
+        root=Path(__file__).parent
+        entries=(root/"source.sha256").read_text().splitlines()
+        self.assertEqual(len(entries),8)
+        for line in entries:
+            self.assertRegex(line,r"^[a-f0-9]{64}  [a-zA-Z0-9_.]+$")
+            digest,name=line.split("  ",1)
+            self.assertEqual(hashlib.sha256((root/name).read_bytes()).hexdigest(),digest)
     def test_boundaries(self):
         a=namespace(Path("/temp"),[])
         for step in (5150,13000):self.assertEqual(s.checkpoint_for_step(a,step),(a.checkpoint_root/f"step-{step}.ckpt",177623))
