@@ -138,7 +138,7 @@ def run_checked(command: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task-index", type=int, required=True)
-    parser.add_argument("--group-count", type=int, default=6)
+    parser.add_argument("--group-count", type=int, default=8)
     parser.add_argument("--checkpoint-root", type=Path, required=True)
     parser.add_argument("--resume-checkpoint-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
@@ -170,7 +170,7 @@ def main() -> None:
     assert args.checkpoint_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop3-histe4-25k-v1/e4g5sc3lr1-178786")
     assert args.resume_checkpoint_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop3-histe4-25k-v1/e4g5sc3lr2-181407")
     assert args.output_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/evaluation/e4_g5sc_loop3_resume181407_fp32_online_24gpu_gt_step50_20260910_v1/E4_G5SC_LOOP3/lineage-178786-181407")
-    assert args.group_count == 6
+    assert args.group_count == 8
     assert args.claims_root == args.output_root / ".claims-v1"
     group_index = args.task_index // 4
     shard_index = args.task_index % 4

@@ -6,12 +6,12 @@ import os
 from pathlib import Path
 
 ROOT = Path('/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1')
-TAG = 'e4_g5sc_loop3_resume181407_eval_fp32_online_24gpu_gt_step50_20260911_r2'
+TAG = 'e4_g5sc_loop3_resume181407_eval_fp32_online_32gpu_bg_step50_20260911_v1'
 STAGE = ROOT/'stage'/TAG/'online_resume'
 OUT = ROOT/'evaluation/e4_g5sc_loop3_resume181407_fp32_online_24gpu_gt_step50_20260910_v1/E4_G5SC_LOOP3/lineage-178786-181407'
 OLD_TAG = 'e4_g5sc_loop3_resume181407_eval_fp32_online_24gpu_gt_step50_20260910_v1'
 OLD_WORK = ROOT/'analysis'/OLD_TAG/'E4_G5SC_LOOP3/lineage-178786-181407/job-181580/work'
-NAME = 'e4g5sc3r24gt2'
+NAME = 'e4g5sc3r32bg1'
 POLICY = ROOT/'stage/rw_sample50_gpu_shard_validation1_v1/gpu_shard_policy_lpt4.json'
 
 def signatures(paths):
@@ -40,7 +40,7 @@ def runtime_contract():
     assert receipt['registration_complete'] is True
     assert str(receipt['evaluation_job']) == os.environ['SLURM_JOB_ID']
     assert os.environ['SLURM_JOB_NAME'] == NAME
-    assert os.environ['SLURM_JOB_QOS'] == 'gtqos'
+    assert os.environ['SLURM_JOB_QOS'] == 'bgqos'
     assert receipt['retained_steps'] == [8950]
     assert receipt['failed_job'] == 181580
     return receipt
@@ -59,4 +59,3 @@ def install_reusable_shard(receipt, step, index, target, checkpoint, policy):
     else:
         assert not target.exists(), target
         target.symlink_to(original, target_is_directory=True)
-

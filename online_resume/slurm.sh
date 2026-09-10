@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=e4g5sc3r24gt2
+#SBATCH --job-name=e4g5sc3r32bg1
 #SBATCH --partition=faculty
 #SBATCH --account=faculty-acc
-#SBATCH --qos=gtqos
+#SBATCH --qos=bgqos
 #SBATCH --nodes=4
-#SBATCH --ntasks=24
-#SBATCH --ntasks-per-node=6
+#SBATCH --ntasks=32
+#SBATCH --ntasks-per-node=8
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=120G
@@ -14,20 +14,20 @@
 #SBATCH --no-requeue
 #SBATCH --nice=0
 #SBATCH --chdir=/vast/users/guangyi.chen
-#SBATCH --output=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/logs/e4_g5sc_loop3_resume181407_eval_fp32_online_24gpu_gt_step50_20260911_r2/slurm-%j.out
-#SBATCH --error=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/logs/e4_g5sc_loop3_resume181407_eval_fp32_online_24gpu_gt_step50_20260911_r2/slurm-%j.err
+#SBATCH --output=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/logs/e4_g5sc_loop3_resume181407_eval_fp32_online_32gpu_bg_step50_20260911_v1/slurm-%j.out
+#SBATCH --error=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/logs/e4_g5sc_loop3_resume181407_eval_fp32_online_32gpu_bg_step50_20260911_v1/slurm-%j.err
 set -euo pipefail
-STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/e4_g5sc_loop3_resume181407_eval_fp32_online_24gpu_gt_step50_20260911_r2/online_resume
+STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/e4_g5sc_loop3_resume181407_eval_fp32_online_32gpu_bg_step50_20260911_v1/online_resume
 SOURCE_STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/synthetic96_rw_sample50_stage2_true_rw50_eval_fp32_gpu_shard20_v1
 V1_STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/rw_sample50_gpu_shard_validation1_v1
 PROD_STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/synthetic96_rw_sample50_stage2_true_rw50_eval_fp32_online_20gpu_v1
 OUTPUT_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/evaluation/e4_g5sc_loop3_resume181407_fp32_online_24gpu_gt_step50_20260910_v1/E4_G5SC_LOOP3/lineage-178786-181407
-JOB_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/analysis/e4_g5sc_loop3_resume181407_eval_fp32_online_24gpu_gt_step50_20260911_r2/E4_G5SC_LOOP3/lineage-178786-181407/job-${SLURM_JOB_ID}
-LOG_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/logs/e4_g5sc_loop3_resume181407_eval_fp32_online_24gpu_gt_step50_20260911_r2/E4_G5SC_LOOP3/lineage-178786-181407/job-${SLURM_JOB_ID}
-test "${SLURM_JOB_NAME}" = e4g5sc3r24gt2
+JOB_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/analysis/e4_g5sc_loop3_resume181407_eval_fp32_online_32gpu_bg_step50_20260911_v1/E4_G5SC_LOOP3/lineage-178786-181407/job-${SLURM_JOB_ID}
+LOG_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/logs/e4_g5sc_loop3_resume181407_eval_fp32_online_32gpu_bg_step50_20260911_v1/E4_G5SC_LOOP3/lineage-178786-181407/job-${SLURM_JOB_ID}
+test "${SLURM_JOB_NAME}" = e4g5sc3r32bg1
 test "${SLURM_NNODES}" -eq 4
-test "${SLURM_NTASKS}" -eq 24
-test "${SLURM_JOB_QOS}" = gtqos
+test "${SLURM_NTASKS}" -eq 32
+test "${SLURM_JOB_QOS}" = bgqos
 (cd "${SOURCE_STAGE}" && sha256sum -c source.sha256)
 (cd "${V1_STAGE}" && sha256sum -c source.sha256)
 (cd "${PROD_STAGE}" && sha256sum -c source.sha256)
@@ -36,8 +36,8 @@ python3 -c 'import sys; sys.path.insert(0,"'"${STAGE}"'"); from recovery import 
 mkdir -p "${OUTPUT_ROOT}" "${JOB_ROOT}" "${LOG_ROOT}"
 exec 9>"${OUTPUT_ROOT}/.fp32-online-worksteal.lock"
 flock -n 9 || { echo "evaluator lock held" >&2; exit 2; }
-srun --gpu-bind=single:1 --nodes=4 --ntasks=24 --ntasks-per-node=6 --gpus-per-task=1 --cpus-per-task=4   --kill-on-bad-exit=1 --wait=0   --output="${LOG_ROOT}/group-task-%t-${SLURM_JOB_ID}.out"   --error="${LOG_ROOT}/group-task-%t-${SLURM_JOB_ID}.err"   bash "${STAGE}/run_group_worker.sh"
-for task in $(seq 0 23); do test -s "${JOB_ROOT}/task-${task}/task.complete"; done
+srun --gpu-bind=single:1 --nodes=4 --ntasks=32 --ntasks-per-node=8 --gpus-per-task=1 --cpus-per-task=4   --kill-on-bad-exit=1 --wait=0   --output="${LOG_ROOT}/group-task-%t-${SLURM_JOB_ID}.out"   --error="${LOG_ROOT}/group-task-%t-${SLURM_JOB_ID}.err"   bash "${STAGE}/run_group_worker.sh"
+for task in $(seq 0 31); do test -s "${JOB_ROOT}/task-${task}/task.complete"; done
 python3 - "${OUTPUT_ROOT}" <<'PY'
 import csv, math, sys, time
 from pathlib import Path
@@ -58,5 +58,5 @@ first = scan(); time.sleep(12); second = scan()
 if first != second: raise SystemExit("strict panels changed across stability scan")
 print("strict_exact178_panels=324 stable_scan_sec=12 explicit_fp32=1 amp=0 fa3=0 complete=1 protocol_validation=1")
 PY
-printf 'job_id=%s training_lineage=178786,181407 groups=6 shards=4 gpus=24 strict=324 explicit_fp32=1 complete=1
+printf 'job_id=%s training_lineage=178786,181407 groups=8 shards=4 gpus=32 strict=324 explicit_fp32=1 complete=1
 '   "${SLURM_JOB_ID}" >"${JOB_ROOT}/job.complete"

@@ -71,20 +71,20 @@ class ResumeTests(unittest.TestCase):
             a.expected_dataset_names={'wrong'}
             with self.assertRaises(AssertionError):scheduler.completed_step(a,8950)
 
-    def test_atomic_claims_across_six_processes(self):
+    def test_atomic_claims_across_eight_processes(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)
-            a=argparse.Namespace(checkpoint_root=root/'old',resume_checkpoint_root=root/'new',output_root=root/'out',claims_root=root/'out/.claims-v1',lock_path=root/'out/.claim.lock',retained_steps=[],steps=list(range(8850,9150,50)),checkpoint_stable_sec=0)
+            a=argparse.Namespace(checkpoint_root=root/'old',resume_checkpoint_root=root/'new',output_root=root/'out',claims_root=root/'out/.claims-v1',lock_path=root/'out/.claim.lock',retained_steps=[],steps=list(range(8850,9250,50)),checkpoint_stable_sec=0)
             a.checkpoint_root.mkdir()
             for s in a.steps:
                 with (a.checkpoint_root/f'step-{s}.ckpt').open('wb') as f:f.truncate(100_000_001)
             ctx=multiprocessing.get_context('fork');q=ctx.Queue()
-            ps=[ctx.Process(target=parallel_claim,args=(a,i,q)) for i in range(6)]
+            ps=[ctx.Process(target=parallel_claim,args=(a,i,q)) for i in range(8)]
             for p in ps:p.start()
             values=[q.get(timeout=10) for _ in ps]
             for p in ps:p.join(10);self.assertEqual(p.exitcode,0)
             self.assertEqual(sorted(x['step'] for x in values),a.steps)
-            self.assertEqual(len(list(a.claims_root.glob('*.json'))),6)
+            self.assertEqual(len(list(a.claims_root.glob('*.json'))),8)
 
     def test_reusable_shard_is_validated_and_not_overwritten(self):
         import recovery
@@ -150,10 +150,10 @@ class ResumeTests(unittest.TestCase):
 
     def test_slurm_contract(self):
         text=(Path(__file__).parent/'slurm.sh').read_text()
-        for token in ['--qos=gtqos','--nodes=4','--ntasks=24','--ntasks-per-node=6','--gpus-per-task=1','--cpus-per-task=4','--mem=120G','--time=3-00:00:00','--nice=0','--no-requeue','--gpu-bind=single:1']:
+        for token in ['--qos=bgqos','--nodes=4','--ntasks=32','--ntasks-per-node=8','--gpus-per-task=1','--cpus-per-task=4','--mem=120G','--time=3-00:00:00','--nice=0','--no-requeue','--gpu-bind=single:1']:
             self.assertIn(token,text)
         worker=(Path(__file__).parent/'run_group_worker.sh').read_text()
-        self.assertIn('--group-count 6',worker)
+        self.assertIn('--group-count 8',worker)
         self.assertIn('--resume-checkpoint-root',worker)
         self.assertIn('torch.cuda.device_count()',worker)
         self.assertIn('ROCR_VISIBLE_DEVICES',worker)
