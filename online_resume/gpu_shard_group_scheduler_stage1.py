@@ -53,19 +53,35 @@ def checkpoint_for_step(args: argparse.Namespace, step: int) -> tuple[Path, int]
 
 def completed_step(args: argparse.Namespace, step: int) -> bool:
     panel = args.output_root / f"step-{step}" / "talent_detailed.txt"
+    receipt_path = panel.parent / "gpu_shard_receipt.json"
+    summary = panel.parent / "talent_summary.txt"
+    # The merger atomically writes the panel BEFORE its 12-second stability
+    # check, receipt and summary. A peer must not mistake that window for done.
+    try:
+        if min(time.time() - p.stat().st_mtime for p in (panel, receipt_path, summary)) < 12:
+            return False
+        receipt = json.loads(receipt_path.read_text())
+    except FileNotFoundError:
+        return False
     if not strict_panel(panel):
         return False
     claim_path = args.claims_root / f"step-{step}.json"
-    receipt = json.loads((panel.parent / "gpu_shard_receipt.json").read_text())
     claim = json.loads(claim_path.read_text())
     checkpoint, training = checkpoint_for_step(args, step)
     assert claim["checkpoint"] == str(checkpoint.resolve())
     assert claim["training_job"] == training and claim["loop_passes"] == 3
-    assert claim["job_id"] == os.environ["SLURM_JOB_ID"]
+    producer = str(claim["job_id"])
+    if producer != os.environ["SLURM_JOB_ID"]:
+        assert producer == '181580' and step in args.retained_steps, (step, producer)
     assert receipt["dataset_count"] == receipt["unique_dataset_count"] == 178
     assert receipt["explicit_fp32"] is True and receipt["clf_use_amp"] is False and receipt["clf_use_fa3"] is False
     assert receipt["shard_count"] == 4 and receipt["model_tag"] == f"step-{step}"
     assert receipt["stable_scan_sec"] >= 12
+    assert receipt['n_estimators'] == 32 and receipt['outer_batch'] == 8
+    assert receipt['n_jobs'] == 1 and receipt['kv_cache'] is False
+    if hasattr(args, 'expected_dataset_names'):
+        with panel.open(newline='') as handle:
+            assert {r['dataset'] for r in csv.DictReader(handle, delimiter='\t')} == args.expected_dataset_names
     return True
 
 
@@ -145,6 +161,12 @@ def main() -> None:
     if not 0 <= args.task_index < args.group_count * 4:
         raise SystemExit("task index outside configured four-GPU groups")
     args.steps = list(range(8850, 25001, 50))
+    from recovery import runtime_contract, install_reusable_shard
+    registration = runtime_contract()
+    args.retained_steps = registration['retained_steps']
+    policy = json.loads(args.shard_policy.read_text())
+    args.expected_dataset_names = {name for shard in policy['shards'] for name in shard}
+    assert len(args.expected_dataset_names) == 178
     assert args.checkpoint_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop3-histe4-25k-v1/e4g5sc3lr1-178786")
     assert args.resume_checkpoint_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop3-histe4-25k-v1/e4g5sc3lr2-181407")
     assert args.output_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/evaluation/e4_g5sc_loop3_resume181407_fp32_online_24gpu_gt_step50_20260910_v1/E4_G5SC_LOOP3/lineage-178786-181407")
@@ -180,6 +202,7 @@ def main() -> None:
         checkpoint = Path(str(assignment["checkpoint"]))
         step_root = args.job_root / "work" / f"step-{step}"
         shard_root = step_root / f"shard-{shard_index}"
+        install_reusable_shard(registration, step, shard_index, shard_root, checkpoint, policy)
         shard_result = shard_root / "shard_result.json"
         if not shard_result.is_file():
             run_checked(
@@ -251,4 +274,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
