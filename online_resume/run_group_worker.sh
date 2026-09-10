@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 R=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1
-STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/e4_g5sc_loop3_resume181407_eval_fp32_online_32gpu_bg_step50_20260911_v1/online_resume
+STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/e4_g5sc_loop3_resume181407_eval_fp32_online_16gpu_gt_step50_20260911_v1/online_resume
 SOURCE_STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/synthetic96_rw_sample50_stage2_true_rw50_eval_fp32_gpu_shard20_v1
 V1_STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/rw_sample50_gpu_shard_validation1_v1
 PROD_STAGE=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/stage/synthetic96_rw_sample50_stage2_true_rw50_eval_fp32_online_20gpu_v1
@@ -12,13 +12,13 @@ CACHE_ROOT=${EVAL_PROJECT}/evaluation_results/official_tabiclv2_data178/_dataset
 CHECKPOINT_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop3-histe4-25k-v1/e4g5sc3lr1-178786
 RESUME_CHECKPOINT_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop3-histe4-25k-v1/e4g5sc3lr2-181407
 OUTPUT_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/evaluation/e4_g5sc_loop3_resume181407_fp32_online_24gpu_gt_step50_20260910_v1/E4_G5SC_LOOP3/lineage-178786-181407
-JOB_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/analysis/e4_g5sc_loop3_resume181407_eval_fp32_online_32gpu_bg_step50_20260911_v1/E4_G5SC_LOOP3/lineage-178786-181407/job-${SLURM_JOB_ID}
+JOB_ROOT=/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/analysis/e4_g5sc_loop3_resume181407_eval_fp32_online_16gpu_gt_step50_20260911_v1/E4_G5SC_LOOP3/lineage-178786-181407/job-${SLURM_JOB_ID}
 TASK=${SLURM_PROCID:?single-GPU task index is required}
-test "${SLURM_JOB_NAME}" = e4g5sc3r32bg1
+test "${SLURM_JOB_NAME}" = e4g5sc3r16gt1
 test "${SLURM_NNODES}" -eq 4
-test "${SLURM_NTASKS}" -eq 32
+test "${SLURM_NTASKS}" -eq 16
 test "${TASK}" -ge 0
-test "${TASK}" -lt 32
+test "${TASK}" -lt 16
 source "${EVAL_PROJECT}/scripts/activate_local_conda.sh"
 export TABICL_EVAL_DISABLE_LOCAL_SRC=1 MODEL_SOURCE_ROOT="${TRAIN_ROOT}"
 export CLS11_ACTIVE_SLOT_ENABLED=False REP6_ENABLED=False PRI2_PAIRED_EVIDENCE_ENABLED=False DGP9_SPLIT_POLICY_ENABLED=False
@@ -62,4 +62,4 @@ temporary = path.with_name(path.name + f".tmp-{os.getpid()}")
 temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 os.replace(temporary, path)
 PY
-python3 "${STAGE}/gpu_shard_group_scheduler_stage1.py"   --task-index "${TASK}" --group-count 8   --checkpoint-root "${CHECKPOINT_ROOT}" --resume-checkpoint-root "${RESUME_CHECKPOINT_ROOT}" --output-root "${OUTPUT_ROOT}"   --job-root "${JOB_ROOT}" --claims-root "${OUTPUT_ROOT}/.claims-v1"   --lock-path "${OUTPUT_ROOT}/.claim.lock"   --gpu-shard-worker "${STAGE}/gpu_shard_worker_deterministic.py"   --merge-script "${SOURCE_STAGE}/merge_gpu_shards_production.py"   --shard-policy "${V1_STAGE}/gpu_shard_policy_lpt4.json"   --data-root "${DATA_ROOT}" --cache-root "${CACHE_ROOT}"   --evaluator-dir "${PROD_STAGE}/evaluator_fp32_v1"   --inner-batch-wrapper "${PROD_STAGE}/talent_eval_ckpt_per_gpu_inner_batch.py"   --inner-batch-policy "${PROD_STAGE}/walking_activity_safe_policy.json"   --checkpoint-stable-sec 60 --poll-sec 5 --cpu-threads 4
+python3 "${STAGE}/gpu_shard_group_scheduler_stage1.py"   --task-index "${TASK}" --group-count 4   --checkpoint-root "${CHECKPOINT_ROOT}" --resume-checkpoint-root "${RESUME_CHECKPOINT_ROOT}" --output-root "${OUTPUT_ROOT}"   --job-root "${JOB_ROOT}" --claims-root "${OUTPUT_ROOT}/.claims-v1"   --lock-path "${OUTPUT_ROOT}/.claim.lock"   --gpu-shard-worker "${STAGE}/gpu_shard_worker_deterministic.py"   --merge-script "${SOURCE_STAGE}/merge_gpu_shards_production.py"   --shard-policy "${V1_STAGE}/gpu_shard_policy_lpt4.json"   --data-root "${DATA_ROOT}" --cache-root "${CACHE_ROOT}"   --evaluator-dir "${PROD_STAGE}/evaluator_fp32_v1"   --inner-batch-wrapper "${PROD_STAGE}/talent_eval_ckpt_per_gpu_inner_batch.py"   --inner-batch-policy "${PROD_STAGE}/walking_activity_safe_policy.json"   --checkpoint-stable-sec 60 --poll-sec 5 --cpu-threads 4

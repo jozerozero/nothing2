@@ -150,10 +150,10 @@ class ResumeTests(unittest.TestCase):
 
     def test_slurm_contract(self):
         text=(Path(__file__).parent/'slurm.sh').read_text()
-        for token in ['--qos=bgqos','--nodes=4','--ntasks=32','--ntasks-per-node=8','--gpus-per-task=1','--cpus-per-task=4','--mem=120G','--time=3-00:00:00','--nice=0','--no-requeue','--gpu-bind=single:1']:
+        for token in ['--qos=gtqos','--nodes=4','--ntasks=16','--ntasks-per-node=4','--gpus-per-task=1','--cpus-per-task=4','--mem=120G','--time=3-00:00:00','--nice=0','--no-requeue','--gpu-bind=single:1']:
             self.assertIn(token,text)
         worker=(Path(__file__).parent/'run_group_worker.sh').read_text()
-        self.assertIn('--group-count 8',worker)
+        self.assertIn('--group-count 4',worker)
         self.assertIn('--resume-checkpoint-root',worker)
         self.assertIn('torch.cuda.device_count()',worker)
         self.assertIn('ROCR_VISIBLE_DEVICES',worker)

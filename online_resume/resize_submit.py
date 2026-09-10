@@ -12,11 +12,11 @@ from types import SimpleNamespace
 from recovery import ROOT, STAGE, OUT, NAME, TAG, POLICY, signatures, validate_shard
 import gpu_shard_group_scheduler_stage1 as scheduler
 
-PREVIOUS = 181614
-PREVIOUS_TAG = 'e4_g5sc_loop3_resume181407_eval_fp32_online_24gpu_gt_step50_20260911_r2'
+PREVIOUS = 181703
+PREVIOUS_TAG = 'e4_g5sc_loop3_resume181407_eval_fp32_online_32gpu_bg_step50_20260911_v1'
 PREVIOUS_STAGE = ROOT / 'stage' / PREVIOUS_TAG / 'online_resume'
-RESOURCES = dict(account='faculty-acc', partition='faculty', qos='bgqos', nodes=4,
-                 gpus=32, tasks_per_node=8, group_count=8, cpus_per_task=4,
+RESOURCES = dict(account='faculty-acc', partition='faculty', qos='gtqos', nodes=4,
+                 gpus=16, tasks_per_node=4, group_count=4, cpus_per_task=4,
                  memory_per_node='120G', time_limit='3-00:00:00', nice=0,
                  dependency=None, requeue=False, gpu_binding='single:1')
 
@@ -33,7 +33,7 @@ def job_control(job):
 
 def queue_conflicts(allowed):
     lines = run(['squeue', '--me', '-h', '-o', '%A|%j|%T']).splitlines()
-    names = {NAME, 'e4g5sc3r24gt2', 'e4g5sc3r24gt1', 'e4g5sc3on24gt2'}
+    names = {NAME, 'e4g5sc3r32bg1', 'e4g5sc3r24gt2', 'e4g5sc3r24gt1', 'e4g5sc3on24gt2'}
     return [line for line in lines if line.split('|')[1] in names and int(line.split('|')[0]) not in allowed]
 
 def preserved_data():
@@ -83,17 +83,17 @@ def source_check():
 
 def verify_new(job):
     f, raw = job_control(job)
-    expected = dict(JobName=NAME, Account='faculty-acc', QOS='bgqos', Partition='faculty',
-                    NumTasks='32', NumCPUs='128', **{'CPUs/Task': '4'},
+    expected = dict(JobName=NAME, Account='faculty-acc', QOS='gtqos', Partition='faculty',
+                    NumTasks='16', NumCPUs='64', **{'CPUs/Task': '4'},
                     TimeLimit='3-00:00:00', Nice='0', Requeue='0', Dependency='(null)',
                     Command=str(STAGE / 'slurm.sh'), WorkDir='/vast/users/guangyi.chen',
                     StdOut=str(ROOT / 'logs' / TAG / f'slurm-{job}.out'),
                     StdErr=str(ROOT / 'logs' / TAG / f'slurm-{job}.err'))
     for k, v in expected.items(): assert f[k] == v, (k, f.get(k), v)
     assert f['NumNodes'] in ('4', '4-4')
-    assert f['NtasksPerN:B:S:C'].split(':')[0] == '8'
+    assert f['NtasksPerN:B:S:C'].split(':')[0] == '4'
     assert f['MinMemoryNode'] == '120G'
-    assert 'gres/gpu=32' in f['ReqTRES'].split(',')
+    assert 'gres/gpu=16' in f['ReqTRES'].split(',')
     assert set(f['TresPerTask'].split(',')) == {'cpu=4', 'gres/gpu=1'}
     assert f['TresBind'] == 'gres/gpu:per_task:1'
     assert f['JobState'] == 'PENDING' and f['Reason'] == 'JobHeldUser'
