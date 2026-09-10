@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import time
+from contract import registered_jobs, expected_job
 from pathlib import Path
 
 
@@ -45,27 +46,40 @@ def checkpoint_is_stable(path: Path, stable_sec: float) -> bool:
 
 
 def checkpoint_for_step(args: argparse.Namespace, step: int) -> tuple[Path, int]:
-    if step < 8850 or step > 25000 or step % 50:
+    if step < 5150 or step > 25000 or step % 50:
         raise ValueError(f"outside authorized online range: {step}")
-    root, training = (args.checkpoint_root, 178786) if step <= 14500 else (args.resume_checkpoint_root, 181407)
+    root, training = (args.checkpoint_root, 177623) if step <= 13000 else (args.resume_checkpoint_root, 180825)
     return root / f"step-{step}.ckpt", training
 
 
 def completed_step(args: argparse.Namespace, step: int) -> bool:
     panel = args.output_root / f"step-{step}" / "talent_detailed.txt"
+    receipt_path = panel.parent / "gpu_shard_receipt.json"
+    # Another allocation can observe the merger between panel and receipt writes.
+    # Wait until both exist and are mature instead of treating a partial merge as fatal.
+    try:
+        if min(time.time()-p.stat().st_mtime for p in (panel,receipt_path)) < 12:
+            return False
+    except FileNotFoundError:
+        return False
     if not strict_panel(panel):
         return False
     claim_path = args.claims_root / f"step-{step}.json"
-    receipt = json.loads((panel.parent / "gpu_shard_receipt.json").read_text())
+    receipt = json.loads(receipt_path.read_text())
     claim = json.loads(claim_path.read_text())
     checkpoint, training = checkpoint_for_step(args, step)
     assert claim["checkpoint"] == str(checkpoint.resolve())
-    assert claim["training_job"] == training and claim["loop_passes"] == 3
-    assert claim["job_id"] == os.environ["SLURM_JOB_ID"]
+    assert claim["training_job"] == training and claim["loop_passes"] == 4
+    assert str(claim["job_id"]) in args.allowed_jobs
+    assert claim["qos"] == args.allowed_jobs[str(claim["job_id"])]["qos"]
+    assert claim["job_name"] == args.allowed_jobs[str(claim["job_id"])]["job_name"]
     assert receipt["dataset_count"] == receipt["unique_dataset_count"] == 178
     assert receipt["explicit_fp32"] is True and receipt["clf_use_amp"] is False and receipt["clf_use_fa3"] is False
     assert receipt["shard_count"] == 4 and receipt["model_tag"] == f"step-{step}"
     assert receipt["stable_scan_sec"] >= 12
+    if hasattr(args, "expected_dataset_names"):
+        with panel.open(newline="") as handle:
+            assert {row["dataset"] for row in csv.DictReader(handle,delimiter="\t")} == args.expected_dataset_names
     return True
 
 
@@ -74,6 +88,10 @@ def claim_checkpoint(args: argparse.Namespace, group_index: int, epoch: int) -> 
     args.lock_path.parent.mkdir(parents=True, exist_ok=True)
     with args.lock_path.open("a+", encoding="utf-8") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        args.allowed_jobs = registered_jobs()
+        identity = expected_job()
+        current = args.allowed_jobs[os.environ["SLURM_JOB_ID"]]
+        assert current["qos"] == identity["qos"] and current["job_name"] == identity["job_name"]
         strict_count = 0
         for step in args.steps:
             if completed_step(args, step):
@@ -95,7 +113,9 @@ def claim_checkpoint(args: argparse.Namespace, group_index: int, epoch: int) -> 
                 "step": step,
                 "checkpoint": str(checkpoint.resolve()),
                 "training_job": training,
-                "loop_passes": 3,
+                "loop_passes": 4,
+                "qos": identity["qos"],
+                "job_name": identity["job_name"],
                 "group_index": group_index,
                 "epoch": epoch,
                 "claimed_at_unix": time.time(),
@@ -144,12 +164,16 @@ def main() -> None:
 
     if not 0 <= args.task_index < args.group_count * 4:
         raise SystemExit("task index outside configured four-GPU groups")
-    args.steps = list(range(8850, 25001, 50))
-    assert args.checkpoint_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop3-histe4-25k-v1/e4g5sc3lr1-178786")
-    assert args.resume_checkpoint_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop3-histe4-25k-v1/e4g5sc3lr2-181407")
-    assert args.output_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/evaluation/e4_g5sc_loop3_resume181407_fp32_online_24gpu_gt_step50_20260910_v1/E4_G5SC_LOOP3/lineage-178786-181407")
-    assert args.group_count == 6
+    args.steps = list(range(5150, 25001, 50))
+    assert args.checkpoint_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop4-histe4-25k-v1/e4g5sc4l25v1-177623")
+    assert args.resume_checkpoint_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/checkpoints/e4_g5_support_condition_alpha_loops_20260907_v1/g36-g5scalpha-loop4-histe4-25k-v1/e4g5sc4lr1-180825")
+    assert args.output_root == Path("/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1/evaluation/e4_g5sc_loop4_resume180825_fp32_online_gt8_st4_step50_20260910_v1/E4_G5SC_LOOP4/lineage-177623-180825")
+    assert args.group_count == expected_job()["group_count"]
     assert args.claims_root == args.output_root / ".claims-v1"
+    policy = json.loads(args.shard_policy.read_text())
+    names = [name for shard in policy["shards"] for name in shard]
+    assert len(names) == len(set(names)) == 178 and len(policy["shards"]) == 4
+    args.expected_dataset_names = set(names)
     group_index = args.task_index // 4
     shard_index = args.task_index % 4
     group_root = args.job_root / f"group-{group_index}"
@@ -181,6 +205,8 @@ def main() -> None:
         step_root = args.job_root / "work" / f"step-{step}"
         shard_root = step_root / f"shard-{shard_index}"
         shard_result = shard_root / "shard_result.json"
+        assert str(assignment["job_id"]) == os.environ["SLURM_JOB_ID"]
+        assert checkpoint_for_step(args, step) == (checkpoint, assignment["training_job"])
         if not shard_result.is_file():
             run_checked(
                 [
@@ -213,6 +239,7 @@ def main() -> None:
             shard_results = [step_root / f"shard-{index}" / "shard_result.json" for index in range(4)]
             while not all(path.is_file() for path in shard_results):
                 time.sleep(args.poll_sec)
+            assert not (args.output_root / f"step-{step}" / "talent_detailed.txt").exists(), "refuse result overwrite"
             run_checked(
                 [
                     "python3",
@@ -236,6 +263,10 @@ def main() -> None:
                     "group_index": group_index,
                     "epoch": epoch,
                     "strict_exact178": True,
+                    "producer_job": os.environ["SLURM_JOB_ID"],
+                    "training_job": assignment["training_job"],
+                    "checkpoint": str(checkpoint),
+                    "loop_passes": 4,
                     "explicit_fp32": True,
                     "completed_at_unix": time.time(),
                 },
@@ -251,4 +282,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
