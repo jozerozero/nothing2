@@ -65,11 +65,15 @@ def build_t25_prior(config):
     """
     from tabicl.prior import PriorDataset
     from tabicl.prior.graph_lib._config import PriorConfig
+    # T25 uses None as its native fixed-length sentinel; equal integer bounds
+    # otherwise reach np.random.randint(low, high) and fail with low >= high.
+    # Keep the requested config intact for model/training/checkpoint contracts.
+    prior_min_seq_len = None if config.min_seq_len == config.max_seq_len else config.min_seq_len
     return PriorDataset(
         regression=True, batch_size=config.batch_size,
         batch_size_per_gp=config.batch_size_per_gp,
         min_features=config.min_features, max_features=config.max_features,
-        max_classes=0, min_seq_len=config.min_seq_len,
+        max_classes=0, min_seq_len=prior_min_seq_len,
         max_seq_len=config.max_seq_len, log_seq_len=config.log_seq_len,
         log_n_features=config.log_n_features, seq_len_per_gp=config.seq_len_per_gp,
         min_train_size=config.min_train_size, max_train_size=config.max_train_size,

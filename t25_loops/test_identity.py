@@ -316,11 +316,15 @@ def main():
             dataset = build_t25_prior(config)
             require(dataset.regression and dataset.prior_type == "graph_scm", "NOT_ACTUAL_REGRESSION_GRAPH_PRIOR")
             require(dataset.prior.n_jobs == 1, "NESTED_GENERATOR_MULTIPROCESSING")
+            require(dataset.prior.min_seq_len is None and dataset.prior.max_seq_len == config.max_seq_len,
+                    "FIXED_LENGTH_PRIOR_BOUNDS_NOT_NORMALIZED")
             with mock.patch.object(target_prior, "map_to_template_from_support",
                                    wraps=target_prior.map_to_template_from_support) as mapped:
                 batch = dataset.get_batch()
             require(len(batch) == 5, "PRIOR_BATCH_CONTRACT", str(len(batch)))
             bx, by, bd, lengths, supports = batch
+            require(lengths.numel() == config.batch_size and (lengths == config.max_seq_len).all().item(),
+                    "REAL_PRIOR_NOT_FIXED_LENGTH", str(lengths))
             bx = bx.to_padded_tensor(0.0) if bx.is_nested else bx
             by = by.to_padded_tensor(0.0) if by.is_nested else by
             require(torch.isfinite(bx).all().item() and torch.isfinite(by).all().item(), "NONFINITE_REAL_PRIOR")
@@ -336,6 +340,7 @@ def main():
                     "REAL_GENERATOR_GRADIENT_NONFINITE")
             generator_mixes[str(mix)] = {"status": "PASS", "mapped_calls": mapped.call_count,
                                          "shape": list(bx.shape), "support_size": n,
+                                         "sequence_lengths": lengths.tolist(), "prior_min_seq_len": dataset.prior.min_seq_len,
                                          "target_abs_max": by.abs().max().item(), "pinball_loss": actual_loss.item()}
     checks["actual_t25_graph_generator_mix0_mix1_and_999_pinball"] = "PASS"
 
@@ -354,6 +359,9 @@ def main():
                     "TRAINER_CLASSIFICATION_MODEL")
             require(type(trainer.optimizer).__name__ == "Muon", "TRAINER_NOT_NATIVE_MUON")
             require("_muon" not in type(trainer.optimizer).__module__, "T25_OPTIMIZER_USED_INSTEAD_OF_G5SC")
+            training_prior = trainer.dataloader.dataset.prior
+            require(training_prior.min_seq_len is None and training_prior.max_seq_len == config.max_seq_len,
+                    "TRAINER_FIXED_LENGTH_PRIOR_BOUNDS_NOT_NORMALIZED")
             iterator = iter(trainer.dataloader)
             before = tensor_state_hash(trainer.raw_model)
             with mock.patch.object(F, "cross_entropy", side_effect=AssertionError("REGRESSION_CALLED_CROSS_ENTROPY")), \
@@ -361,7 +369,10 @@ def main():
                 # Native cosine warmup starts at LR=0. Two actual updates prove
                 # parameter motion without modifying the production schedule.
                 for step in range(2):
-                    metrics = trainer.run_batch(next(iterator))
+                    batch = next(iterator)
+                    require((batch[3] == config.max_seq_len).all().item(),
+                            "TRAINER_BATCH_NOT_FIXED_LENGTH", str(batch[3]))
+                    metrics = trainer.run_batch(batch)
                     require(not metrics.get("skipped_update", False), "TRAINER_SKIPPED_UPDATE", str(metrics))
                     trainer.curr_step = step + 1
             require(optimizer_step.call_count == 2, "TRAINER_DID_NOT_EXECUTE_MUON_STEPS")
