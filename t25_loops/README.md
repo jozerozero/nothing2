@@ -1,15 +1,32 @@
-# T25 with G5SC gated shared-depth Loop3 and Loop4
+# T25 Safe-Tail RW25 with the complete native G5SC backbone
 
-User authorized training two new regression arms, then explicitly selected G5SC-style gated loops on 2026-09-12. This is not inference-only and does not resume the trained T25 checkpoint.
+This v2 deployment replaces the rejected regression-backbone gated-encoder port. It copies and hashes every original G5SC model module, retaining its native column/row stack, support-conditioned shared-depth gate, attention, GELU, biased LayerNorm, QASSMax defaults, and original Muon/scheduler implementation. A thin task adapter supplies the frozen T25 generator, continuous support labels and the 999-quantile pinball regression task. Historical `gated_encoder.py` and old launchers here are not deployed or executed.
 
-Baseline: T25 Safe-Tail RW25, training151162. All original data generation, original train-only profile, regression head999, seed43, Muon8e-4, fixed4096, batch1024/micro2, 25k steps and every50 checkpoint remain. Both arms start from scratch. No classification model, SwiGLU, E4 transform, or extra attention gates are imported.
+Loop3 and Loop4 each reuse the same 12 ICL blocks. Both start fresh with seed 2026080101, global batch 1024/microbatch 2, LR 6e-4, Muon momentum .95, cautious weight decay .01, cosine warmup .02 and floor 0. AMP and GradScaler are enabled; recompute is disabled (threshold 20000). All 1000 checkpoints, every 25 steps through 25000, are retained per arm.
 
-Each pass shares the original12 ICL blocks. For t>=2, h_t=h_(t-1)+alpha_D*(Blocks(h_(t-1))-h_(t-1)), alpha_D=tanh(a+0.1*(2*sigmoid(w@c_D)-1)). Same a and w reused at every pass. Parameters a=zeros(()), w=zeros(51) add52 scalars without consuming RNG. G5SC support-statistics code is copied verbatim. In regression its four classification-label statistic slots stay zero. Query values do not enter context, although the original statistic includes total sequence length.
+T25 data remains graph_scm, fixed 4096 rows, RW-SAMPLE50 probability .25, group size 4, frozen train-only profile and Safe-Tail mapping. Four DataLoader workers use one internal generation job each, avoiding daemon-nested multiprocessing. E4 cross-table and TL curriculum patches are disabled. `PYTHONPATH` is exactly the new stage and its complete source tree; no shared package is installed.
 
-Necessary implementation changes: additional passes use activation recomputation to bound memory without changing batch or numerical function; original Muon scalar reshape is made safe for the new scalar gate, with no change to existing tensor shapes or optimizer settings. Every training rank runs a small actual Loop3/4 FP32 forward/backward probe while restoring RNG and clearing gradients before training.
+Each arm requests faculty/bgqos, 8 nodes × 8 GPUs, 128 CPUs and 2 TiB per node, three days, Nice 0, no requeue and no dependencies. Historical full-G5 exclusions plus nodes 193, 195, 216, 228, 287 and 296 are retained. Default stage is `stage/t25_fullg5sc_loop34_bg64_20260912_v2`; a fresh explicitly versioned stage can be supplied after a failed preflight. Existing stages, checkpoints and other jobs are never overwritten.
 
-Resources per arm: faculty/test-acc/bgqos,8 nodes x8GPU=64GPU,128CPU/node,2T/node,3days,Nice0,no-requeue. Keep original exclusion set and add known unsafe nodes193,195,216,228,287,296. Total requested128GPU. No other jobs are modified.
+Preparation requires explicit paths and an account. It does not submit:
 
-Prepared source is copied from frozen adapted T25 source, with exact hash checks on edited baseline files; it never mutates baseline source. The deployment repo is only an overlay and is not installed into a shared environment. PYTHONPATH selects the isolated derived source and existing dependencies.
+```bash
+python prepare_deployment.py --g5-source ORIGINAL_G5_SOURCE \
+  --t25-source FROZEN_ADAPTED_T25_SOURCE --t25-prior-overlay FROZEN_ADAPTED_T25_SOURCE \
+  --profile FROZEN_T25_PROFILE --profile-audit FROZEN_T25_PROFILE_AUDIT \
+  --account USER_APPROVED_ACCOUNT
+```
 
-Only t25_loops is active in this branch. Inherited Loop4 evaluator files outside it are historical and are not executed.
+Run the real native identity, pinball/backward, generator mix-0/mix-1 and trainer-step smoke with the same Python environment, saving `native_identity_smoke.json` in the new stage:
+
+```bash
+python NEW_STAGE/test_identity.py --source NEW_STAGE/source \
+  --regression-target-profile NEW_STAGE/artifacts/profile.json \
+  --device cpu --receipt NEW_STAGE/native_identity_smoke.json
+python NEW_STAGE/validate_launch.py --stage NEW_STAGE --passes 3 --account USER_APPROVED_ACCOUNT
+python NEW_STAGE/validate_launch.py --stage NEW_STAGE --passes 4 --account USER_APPROVED_ACCOUNT
+```
+
+Only after the user explicitly chooses the account, run `submit_pair.py --stage NEW_STAGE --account USER_APPROVED_ACCOUNT`. There is no default account. The script checks account association, rejects MaxSubmitJobs=0, parses the actual trainer arguments, checks source/profile/smoke identity, checks duplicate jobs and fresh output roots, and runs `sbatch --test-only` for both. An exclusive durable intent prevents repeated submission. Both jobs are submitted held; resources, exclusions, paths and absence of dependencies must pass before either is released. Failures preserve exact state and leave unreleased jobs held; inspect the receipt before any manual recovery.
+
+Every training rank performs its native-model forward/backward probe before DDP/training, with RNG, parameters and gradients preserved. End-of-run completion additionally requires all 64 rank probe receipts and exactly 1000 checkpoint files. Submission alone is not reported as successful training.
