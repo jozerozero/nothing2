@@ -36,7 +36,7 @@ def main() -> None:
 
     import tabicl._model.tabicl as tabicl_module
     from tabicl._model.g5sc_regression_loop import GatedLoopEncoder, SupportSchemaStatistics
-    from tabicl._model.kv_cache import KVCache
+    from tabicl._model.kv_cache import KVCache, TabICLCache
     from tabicl._model.tabicl import TabICL
     from tabicl.train._muon import Muon
 
@@ -154,7 +154,9 @@ def main() -> None:
                 target[index] += 1
             handles.append(block.register_forward_hook(count_forward))
         try:
-            outputs[passes] = model(X.clone(), y.clone(), d=d.clone())
+            # Grouped column embedding accepts no per-table d.  Keep d only
+            # for the independent support-statistics masking tests below.
+            outputs[passes] = model(X.clone(), y.clone())
         finally:
             for handle in handles:
                 handle.remove()
@@ -219,6 +221,39 @@ def main() -> None:
     )
     checks["support_only_context_and_zero_regression_label_slots"] = "PASS"
 
+    # The top-level cache must retain the context through the public cache
+    # operations used for inference device placement and ensemble batching.
+    context_cache = TabICLCache(
+        train_shape=(2, train_size, X.shape[-1]),
+        num_classes=0,
+        g5sc_dataset_context=context.detach().clone(),
+    )
+    moved_cache = context_cache.to("cpu", dtype=torch.float64)
+    require(moved_cache.g5sc_dataset_context is not None, "CACHE_TO_DROPS_CONTEXT")
+    require(moved_cache.g5sc_dataset_context.device.type == "cpu", "CACHE_TO_CONTEXT_DEVICE")
+    require(moved_cache.g5sc_dataset_context.dtype == torch.float64, "CACHE_TO_CONTEXT_DTYPE")
+    require(
+        torch.equal(moved_cache.g5sc_dataset_context, context.to(device="cpu", dtype=torch.float64)),
+        "CACHE_TO_CONTEXT_VALUE_DRIFT",
+    )
+    first_cache = context_cache.slice_batch(0, 1)
+    second_cache = context_cache.slice_batch(1, 2)
+    require(first_cache.g5sc_dataset_context is not None, "CACHE_SLICE_DROPS_CONTEXT")
+    require(second_cache.g5sc_dataset_context is not None, "CACHE_SLICE_DROPS_CONTEXT")
+    require(torch.equal(first_cache.g5sc_dataset_context, context[:1]), "CACHE_FIRST_SLICE_CONTEXT_DRIFT")
+    require(torch.equal(second_cache.g5sc_dataset_context, context[1:]), "CACHE_SECOND_SLICE_CONTEXT_DRIFT")
+    merged_cache = TabICLCache.concat([first_cache, second_cache], dim=0)
+    require(merged_cache.g5sc_dataset_context is not None, "CACHE_CONCAT_DROPS_CONTEXT")
+    require(torch.equal(merged_cache.g5sc_dataset_context, context), "CACHE_CONCAT_CONTEXT_DRIFT")
+    require(merged_cache.train_shape == context_cache.train_shape, "CACHE_CONCAT_TRAIN_SHAPE_DRIFT")
+    require(torch.equal(context_cache.g5sc_dataset_context, context), "CACHE_OPERATIONS_MUTATE_CONTEXT")
+    plain_cache = TabICLCache(train_shape=(2, train_size, X.shape[-1]), num_classes=0)
+    require(plain_cache.to("cpu").g5sc_dataset_context is None, "PLAIN_CACHE_TO_ADDS_CONTEXT")
+    plain_slices = [plain_cache.slice_batch(0, 1), plain_cache.slice_batch(1, 2)]
+    require(all(item.g5sc_dataset_context is None for item in plain_slices), "PLAIN_CACHE_SLICE_ADDS_CONTEXT")
+    require(TabICLCache.concat(plain_slices).g5sc_dataset_context is None, "PLAIN_CACHE_CONCAT_ADDS_CONTEXT")
+    checks["top_level_cache_context_to_slice_concat"] = "PASS"
+
     # All remaining checks use deliberately nonzero gates.  Zero gates alone
     # could conceal broken recurrent execution or incorrectly indexed caches.
     with torch.no_grad():
@@ -228,13 +263,13 @@ def main() -> None:
             encoder.shared_depth_condition_weight.copy_(
                 torch.linspace(-0.02, 0.02, 51, device=device)
             )
-    baseline_eval = models[1].eval()(X.clone(), y.clone(), d=d.clone())
+    baseline_eval = models[1].eval()(X.clone(), y.clone())
     cache_sizes = {}
     for passes in (3, 4):
         model = models[passes].eval()
         encoder = model.icl_predictor.tf_icl
         with torch.no_grad():
-            nonzero_output = model(X.clone(), y.clone(), d=d.clone())
+            nonzero_output = model(X.clone(), y.clone())
             require(torch.isfinite(nonzero_output).all().item(), "NONFINITE_NONZERO_GATE_OUTPUT")
             require(not torch.equal(nonzero_output, baseline_eval), "NONZERO_GATE_HAS_NO_EFFECT", str(passes))
             ctx = context.to(dtype=encoder.shared_depth_condition_weight.dtype)
@@ -252,7 +287,7 @@ def main() -> None:
             saved = torch.load(buffer, map_location=device, weights_only=True)
             reloaded = TabICL(**saved["config"]).to(device).eval()
             reloaded.load_state_dict(saved["state_dict"], strict=True)
-            restored_output = reloaded(X.clone(), y.clone(), d=d.clone())
+            restored_output = reloaded(X.clone(), y.clone())
             require(torch.equal(nonzero_output, restored_output), "CONFIG_STATE_ROUNDTRIP_DRIFT", str(passes))
             require(reloaded.icl_predictor.tf_icl.shared_depth_num_passes == passes, "RELOADED_PASS_COUNT_DRIFT")
 

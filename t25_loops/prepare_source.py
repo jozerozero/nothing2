@@ -128,6 +128,28 @@ def prepare(source, destination):
         '                mgr_config=inference_config.ICL_CONFIG,\n                dataset_context=dataset_context,', 2))
     save('_model/tabicl.py', text)
 
+    text = (out/'_model/kv_cache.py').read_text()
+    text = replace(text, '    num_classes: Optional[int] = None',
+                   '    num_classes: Optional[int] = None\n    g5sc_dataset_context: Optional[Tensor] = None')
+    text = method(text, 'TabICLCache', 'slice_batch', lambda s: replace(s,
+        '            num_classes=self.num_classes,',
+        '            num_classes=self.num_classes,\n'
+        '            g5sc_dataset_context=self.g5sc_dataset_context[indices] if self.g5sc_dataset_context is not None else None,'))
+    text = method(text, 'TabICLCache', 'to', lambda s: replace(s,
+        '            num_classes=self.num_classes,',
+        '            num_classes=self.num_classes,\n'
+        '            g5sc_dataset_context=self.g5sc_dataset_context.to(device=device, dtype=dtype) if self.g5sc_dataset_context is not None else None,'))
+    text = method(text, 'TabICLCache', 'concat', lambda s: replace(replace(s,
+        '        total_batch = sum(c.train_shape[0] for c in caches)',
+        '        contexts = [c.g5sc_dataset_context for c in caches if c.g5sc_dataset_context is not None]\n'
+        '        if contexts and len(contexts) != len(caches):\n'
+        '            raise ValueError("Cannot mix gated and non-gated caches")\n'
+        '        total_batch = sum(c.train_shape[0] for c in caches)'),
+        '            num_classes=caches[0].num_classes,',
+        '            num_classes=caches[0].num_classes,\n'
+        '            g5sc_dataset_context=torch.cat(contexts, dim=dim) if contexts else None,'))
+    save('_model/kv_cache.py', text)
+
     text = (out/'train/_train_config.py').read_text()
     text = replace(text, '    parser.add_argument("--checkpoint_dir",',
         '    parser.add_argument("--shared_depth_icl_num_passes", type=int, choices=(1, 3, 4), default=1)\n'
