@@ -67,7 +67,8 @@ def main():
         torch.cuda.set_device(0)
     device = torch.device(args.device)
     seed = 2026080101
-    common = dict(max_classes=0, num_quantiles=999, embed_dim=16,
+    # Native row RoPE requires head_dim > 2; retain eight heads with width 32.
+    common = dict(max_classes=0, num_quantiles=999, embed_dim=32,
                   col_num_blocks=3, col_nhead=8, col_num_inds=8,
                   col_feature_group="same", col_feature_group_size=3,
                   col_target_aware=True, col_ssmax="qassmax-mlp-elementwise",
@@ -76,6 +77,10 @@ def main():
                   ff_factor=2, activation="gelu", dropout=0.0,
                   norm_first=True, bias_free_ln=False, recompute=False,
                   shared_depth_icl_rho=1.0)
+    icl_width = common["embed_dim"] * common["row_num_cls"]
+    require(common["embed_dim"] % common["row_nhead"] == 0
+            and common["embed_dim"] // common["row_nhead"] > 2,
+            "TEST_FIXTURE_INVALID_NATIVE_ROPE_HEAD_DIM")
     models, configs, rng = {}, {}, {}
     for passes in (1, 3, 4):
         torch.manual_seed(seed)
@@ -198,7 +203,7 @@ def main():
                                           nonzero_residual_w_norm=enc.shared_depth_condition_weight.grad.norm().item())
         model.eval()
         with torch.no_grad():
-            src = torch.randn(2, 12, 64, generator=generator).to(device)
+            src = torch.randn(2, 12, icl_width, generator=generator).to(device)
             def stack(value):
                 for block in enc.blocks:
                     value = block(q=value, train_size=support_size, rope=enc.rope, ffn_context=context)
