@@ -23,5 +23,5 @@ profile=json.loads((a.base_stage/'gt_regression_official_train_only_quantile_pro
 assert isinstance(profile,dict)
 for receipt in ['cpu_smoke.json']:
     r=json.loads((a.stage/receipt).read_text())
-    assert r['status']=='PASS',r
+    assert r['status']=='PASS_T25_G5SC_LOOP34_SMOKE',r
 print(json.dumps({'status':'PASS_LAUNCH_CONTRACT','passes':passes,'baseline':151162}))

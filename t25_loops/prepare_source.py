@@ -44,7 +44,7 @@ def prepare(source, destination):
     for name, expected in EXPECTED.items():
         assert hashlib.sha256((base/name).read_bytes()).hexdigest() == expected, name
     assert not destination.exists(), f'refuse overwrite: {destination}'
-    shutil.copytree(source, destination, ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.git'))
+    shutil.copytree(source, destination, ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.git', '._*', '__MACOSX'))
     out = destination / 'src/tabicl'
     changes = []
     def save(name, text):
@@ -153,7 +153,9 @@ def prepare(source, destination):
         shutil.copyfile(HERE/src, out/dst)
         changes.append(dst)
     for path in out.rglob('*.py'):
-        compile(path.read_text(), str(path), 'exec')
+        # Bytes respect Python source encoding declarations; Finder sidecars
+        # are excluded above and are not executable Python source.
+        compile(path.read_bytes(), str(path), 'exec')
     report = {'baseline_hashes': EXPECTED, 'changed_files': changes,
               'source': str(source), 'derived_source': str(destination),
               'added_trainable_parameters': 52, 'base_blocks': 12,
