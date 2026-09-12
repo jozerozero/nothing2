@@ -88,7 +88,10 @@ def prepare(source, destination, *, t25_source=None, t25_prior_overlay=None):
     for name, expected in EXPECTED.items():
         if digest(base / name) != expected:
             raise AssertionError(f'Unrecognized G5SC baseline: {name}')
-    model_hashes = {str(p.relative_to(base)): digest(p) for p in sorted((base / '_model').rglob('*.py'))}
+    # AppleDouble transfer sidecars are metadata, not Python model modules;
+    # the immutable source copy below already excludes them.
+    model_hashes = {str(p.relative_to(base)): digest(p) for p in sorted((base / '_model').rglob('*.py'))
+                    if not p.name.startswith('._') and '__MACOSX' not in p.parts}
     if not EXPECTED_G5_MODEL_HASHES or model_hashes != EXPECTED_G5_MODEL_HASHES:
         raise AssertionError('Source is not the canonical audited G5SC model snapshot')
     if not prior_base.is_dir():
