@@ -26,7 +26,11 @@ def main():
     os.environ.clear()
     os.environ.update(env)
     os.nice(19)
-    sidecar.guard_snapshot(sidecar.rss_snapshot(), startup=True)
+    memory = sidecar.rss_snapshot()
+    sidecar.guard_snapshot(memory)
+    sidecar.require(memory['other_same_uid_rss_bytes'] <= 54 * 1024**3,
+                    'This diagnostic needs4GiB plus6GiB parent headroom')
+    print('DIAGNOSTIC_MEMORY_4G', json.dumps(memory), flush=True)
     print('CPU_BIND', json.dumps(sidecar.bind_idle_cpu_cores()), flush=True)
     sidecar.check_idle(sidecar.gpu_idle_record())
     print('IMPORT_NUMPY', flush=True)
