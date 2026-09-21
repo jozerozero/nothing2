@@ -17,6 +17,7 @@ NODE = 'auh7-1b-gpu-196'
 UUID = '8b8b827ace9944c1'
 PCI = '0000:88:00.0'
 SIDECAR = 'existing196092-single-20260922-v1'
+SIDECAR_SCRIPT = 'tabfm_existing_sidecar.py'
 
 
 def cpu_snapshot():
@@ -92,11 +93,12 @@ def prepare(man, root):
             'parent_job_id': PARENT, 'node': NODE, 'gpus': [{'uuid': UUID, 'pci': PCI}],
             'cpu_count': 4, 'mem_gib': 40, 'max_lanes': 1, 'parent_gpu_count': 8,
             'parent_mem_gib': 64, 'deadline_epoch': deadline, 'probe_epoch': b['epoch'],
-            'sidecar_source': identity(Path(__file__).with_name('tabfm_existing_sidecar.py')),
+            'sidecar_source': identity(Path(__file__).with_name(SIDECAR_SCRIPT)),
             'external_idle_probes': [{'epoch': r['epoch'], 'uuid': UUID, 'pci': PCI,
               'used_vram_bytes': check_parent(r)[0]['vram'], 'gpu_busy_percent': 0} for r in (a, b)],
             'startup_other_rss_bytes': check_parent(b)[1], 'free_cpu_cores': free,
             'all8_gpu_reservation_verified': True, 'resources_available_verified': True,
+            'inherited_cpu_count': 64 if SIDECAR_SCRIPT.endswith('_v2.py') else 4,
             'resource_budget_note': 'One existing GPU; extra guard32GiB own /60GiB sameuid total; model defaults unchanged',
             'cpu_observation': {'seconds': elapsed, 'existing_cpu_cores': cpu / elapsed}}
     plan['plan_id'] = digest(plan)
@@ -105,9 +107,14 @@ def prepare(man, root):
 
 
 def main():
+    global SIDECAR, SIDECAR_SCRIPT
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['cpu-snapshot', 'probe1', 'probe2', 'prepare', 'launch'])
+    parser.add_argument('--cpu-binding-v2', action='store_true')
     args = parser.parse_args()
+    if args.cpu_binding_v2:
+        SIDECAR = 'existing196092-single-20260922-v2'
+        SIDECAR_SCRIPT = 'tabfm_existing_sidecar_v2.py'
     if args.mode == 'cpu-snapshot':
         print(json.dumps(cpu_snapshot()))
         return
@@ -120,7 +127,7 @@ def main():
     else:
         plan = read(root / 'plan.json')
         require(time.time() - plan['probe_epoch'] < 300, 'Launch probe stale')
-        cmd = [man['worker_python'], str(Path(__file__).with_name('tabfm_existing_sidecar.py')),
+        cmd = [man['worker_python'], str(plan['sidecar_source']['path']),
                '--plan', str(root / 'plan.json')]
         atomic(man, root / 'launcher-attempt.json', {'epoch': time.time(), 'command': cmd,
                                                   'plan_id': plan['plan_id']})
