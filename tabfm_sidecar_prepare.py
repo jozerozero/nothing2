@@ -47,7 +47,8 @@ def check_parent(record):
     require(len(gpu) == 1 and gpu[0]['pci'] == PCI and gpu[0]['busy'] == 0
             and gpu[0]['vram'] < 128 * 1024**2, 'Selected physical GPU is not empty')
     rss = sum(p['rss'] for p in record['owned_processes'])
-    require(rss <= 20 * 1024**3, 'Existing allocations leave insufficient memory headroom')
+    startup_limit = 40 if SIDECAR_SCRIPT.endswith('_v4.py') else 20
+    require(rss <= startup_limit * 1024**3, 'Existing allocations leave insufficient memory headroom')
     return gpu[0], rss
 
 
@@ -91,19 +92,31 @@ def prepare(man, root):
     require(deadline - time.time() > 3 * 3600, 'Parent has insufficient lifetime')
     plan = {'sidecar_id': SIDECAR, 'campaign_path': str(OUT / 'manifest.json'),
             'parent_job_id': PARENT, 'node': NODE, 'gpus': [{'uuid': UUID, 'pci': PCI}],
-            'cpu_count': 4, 'mem_gib': 40, 'max_lanes': 1, 'parent_gpu_count': 8,
+            'cpu_count': 4, 'mem_gib': 20 if SIDECAR_SCRIPT.endswith('_v4.py') else 40,
+            'max_lanes': 1, 'parent_gpu_count': 8,
             'parent_mem_gib': 64, 'deadline_epoch': deadline, 'probe_epoch': b['epoch'],
             'sidecar_source': identity(Path(__file__).with_name(SIDECAR_SCRIPT)),
             'external_idle_probes': [{'epoch': r['epoch'], 'uuid': UUID, 'pci': PCI,
               'used_vram_bytes': check_parent(r)[0]['vram'], 'gpu_busy_percent': 0} for r in (a, b)],
             'startup_other_rss_bytes': check_parent(b)[1], 'free_cpu_cores': free,
             'all8_gpu_reservation_verified': True, 'resources_available_verified': True,
-            'inherited_cpu_count': 64 if SIDECAR_SCRIPT.endswith(('_v2.py', '_v3.py')) else 4,
+            'inherited_cpu_count': 64 if SIDECAR_SCRIPT.endswith(('_v2.py', '_v3.py', '_v4.py')) else 4,
             'resource_budget_note': 'One existing GPU; extra guard32GiB own /60GiB sameuid total; model defaults unchanged',
             'cpu_observation': {'seconds': elapsed, 'existing_cpu_cores': cpu / elapsed}}
-    if SIDECAR_SCRIPT.endswith('_v3.py'):
+    if SIDECAR_SCRIPT.endswith(('_v3.py', '_v4.py')):
         plan['source_records'] = [identity(Path(__file__).with_name('tabfm_local_tmp.py'))]
         plan['runtime_TMPDIR_override'] = 'private tempfile.mkdtemp(prefix=tfm-, dir=/tmp); only TMPDIR changes'
+    if SIDECAR_SCRIPT.endswith('_v4.py'):
+        from tabfm_default_dispatch import load_campaign
+        from tabfm_regression_shapes import build
+        verified_man, tasks = load_campaign(OUT / 'manifest.json')
+        require(verified_man == man, 'Original campaign changed during sidecar preparation')
+        plan['regression_shape_overlay'] = build(man, tasks)
+        plan['source_records'].append(identity(Path(__file__).with_name('tabfm_regression_shapes.py')))
+        plan['small_task_limits'] = {'max_total_rows': 2048, 'max_features': 100, 'max_classes': 10,
+                                     'unknown_dimensions': 'ineligible'}
+        plan['resource_budget_note'] = ('One existing GPU;20GiB child; operational guard16GiB own/60GiB sameuid total;'
+            'startup other<=40GiB; only manifest-proven small formal tasks; native full support/test/defaults unchanged')
     plan['plan_id'] = digest(plan)
     atomic(man, root / 'plan.json', plan)
     print(json.dumps(plan, sort_keys=True))
@@ -116,6 +129,7 @@ def main():
     versions = parser.add_mutually_exclusive_group()
     versions.add_argument('--cpu-binding-v2', action='store_true')
     versions.add_argument('--local-tmp-v3', action='store_true')
+    versions.add_argument('--small-lane-v4', action='store_true')
     args = parser.parse_args()
     if args.cpu_binding_v2:
         SIDECAR = 'existing196092-single-20260922-v2'
@@ -123,6 +137,9 @@ def main():
     elif args.local_tmp_v3:
         SIDECAR = 'existing196092-single-20260922-v3'
         SIDECAR_SCRIPT = 'tabfm_existing_sidecar_v3.py'
+    elif args.small_lane_v4:
+        SIDECAR = 'existing196092-single-20260922-v4'
+        SIDECAR_SCRIPT = 'tabfm_existing_sidecar_v4.py'
     if args.mode == 'cpu-snapshot':
         print(json.dumps(cpu_snapshot()))
         return
