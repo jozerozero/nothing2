@@ -8,7 +8,8 @@ import subprocess
 import time
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True)
+    p.add_argument('--output',type=Path);a=p.parse_args()
     man=json.loads((a.root/'manifest.json').read_text());now=time.time()
     completed=Counter();suites=defaultdict(Counter);gpus=set();forward_verified=0;invalid=[];elapsed=[]
     for f in (a.root/'results').glob('step-*/row-*.json'):
@@ -43,5 +44,12 @@ def main():
          'per_checkpoint':[{'step':c['step'],'complete':completed[c['step']],'target':224,'suite_counts':suites[c['step']]} for c in man['checkpoints']],
          'physical_GPUs_with_valid_result':len(gpus),'invalid_results':invalid,
          'workers':workers,'active_claims':claims,'errors':errors,'slurm_steps':queue,'launches':receipts}
-    print(json.dumps(out,indent=2,allow_nan=False))
+    if a.output:
+        with a.output.open('x') as handle:json.dump(out,handle,indent=2,allow_nan=False)
+        brief={k:v for k,v in out.items() if k not in ('per_checkpoint','launches','active_claims')}
+        brief['active_claim_count']=len(claims)
+        brief['started_checkpoints']=[x for x in out['per_checkpoint'] if x['complete']]
+        brief['errors']=errors[:4];brief['error_count']=len(errors)
+        print(json.dumps(brief,indent=2,allow_nan=False))
+    else:print(json.dumps(out,indent=2,allow_nan=False))
 if __name__=='__main__':main()
