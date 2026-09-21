@@ -7,6 +7,7 @@ published. A separate attempt directory preserves the retry audit.
 import argparse
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -25,6 +26,18 @@ NODE = 'auh7-1b-gpu-197'
 GPU_UUID = '8db07672d655ee5b'
 GPU_PCI = '0000:47:00.0'
 ROW_IDS = {189: 'TabArena__diamonds', 194: 'TabArena__superconductivity'}
+
+
+def validate_result(result, man, row, ckpt):
+    obj = read(result)
+    assert obj['complete'] and obj['checkpoint_step'] == 22175
+    assert obj['checkpoint']['sha256'] == ckpt['sha256'] and obj['input_fingerprint'] == row['input_fingerprint']
+    assert obj['manifest_id'] == man['manifest_id'] and obj['dataset_index'] == row['dataset_index']
+    assert all(math.isfinite(obj['metrics'][key]) for key in ('rmse', 'r2', 'mae'))
+    assert obj['strict_checkpoint_load'] and obj['protocol_fingerprint'] == man['protocol_fingerprint']
+    assert obj['data_audit']['test_rows_filtered'] == 0 and not obj['data_audit']['query_chunking']
+    assert obj['actual_forward_block_calls'] and all(x == [3]*12 for x in obj['actual_forward_block_calls'])
+    return obj
 
 
 def parent_fields():
@@ -72,8 +85,11 @@ def node_run(manifest_path, attempt):
         assert row['dataset'] == name
         result = root / 'results' / 'step-22175' / f'row-{index:03d}.json'
         if result.exists():
+            validate_result(result, man, row, ckpt)
             print(json.dumps({'reused': str(result)}), flush=True)
             continue
+        fresh_gpu = gpu(GPU_UUID)
+        assert fresh_gpu['pci'] == GPU_PCI and fresh_gpu['vram'] < 64 * 1024**2, 'GPU acquired by another workload'
         claim = root / 'claims' / 'step-22175' / f'row-{index:03d}.json'
         claim.parent.mkdir(parents=True, exist_ok=True)
         token = uuid.uuid4().hex
@@ -86,6 +102,7 @@ def node_run(manifest_path, attempt):
         started = time.monotonic()
         try:
             if result.exists():
+                validate_result(result, man, row, ckpt)
                 continue
             log = audit / f'row-{index:03d}.log'
             cmd = ['taskset', '-c', ','.join(map(str, cpus[:4])), sys.executable,
@@ -113,10 +130,7 @@ def node_run(manifest_path, attempt):
                     except subprocess.TimeoutExpired:
                         pass
             assert current.returncode == 0, f'Row {index} failed: {log}'
-            obj = read(result)
-            assert obj['complete'] and obj['checkpoint_step'] == 22175
-            assert obj['checkpoint']['sha256'] == ckpt['sha256'] and obj['input_fingerprint'] == row['input_fingerprint']
-            assert obj['manifest_id'] == man['manifest_id'] and obj['dataset_index'] == index
+            obj = validate_result(result, man, row, ckpt)
             atomic(audit / f'row-{index:03d}.receipt.json', {**identity, 'complete': True,
                 'result': str(result), 'elapsed_s': time.monotonic() - started,
                 'existing_error_preserved': (root / 'errors' / 'step-22175' / f'row-{index:03d}.json').exists()}, True)
@@ -140,6 +154,8 @@ def launch(manifest_path, attempt):
     folder.mkdir(exist_ok=True)
     with (folder / 'launch.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        steps = subprocess.check_output(['squeue', '--steps', '-j', PARENT, '-h', '-o', '%i|%j'], text=True)
+        assert not any(x in steps for x in ('regsrc22175', 'regft50eval'))
         log = folder / (attempt + '.launch.log')
         command = ['srun', '--jobid=' + PARENT, '--overlap', '--exact', '-N1', '-n1', '-c4',
             '--mem=16G', '--gpus=8', '--gpu-bind=none', '--time=01:00:00',
