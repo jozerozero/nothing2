@@ -22,7 +22,7 @@ from table6_restart_deadline import derive_deadline, parse_duration, parse_field
 from table6_restart_ag import ROOT, BASE, PLAN, CPU_ENV, publish, require, read
 
 REPO = Path(__file__).resolve().parent
-STAGE = ROOT / 'stage/table6_autogluon_sidecar_20260922_v1'
+STAGE = ROOT / 'stage/table6_autogluon_sidecar_20260922_v2'
 PYTHON = '/vast/users/guangyi.chen/anaconda3/envs/tabicl/bin/python'
 WORKER_SHA = '3ca3bf4d620b026f29409a9361630f0110227c116a68317a975948ccb79ecfaf'
 FILES = ('table6_restart_ag_sidecar.py', 'table6_restart_ag.py', 'table6_restart_deadline.py')
@@ -103,7 +103,10 @@ def srun_command(parent, node, launch_dir):
             '--ntasks=4', '--ntasks-per-node=4', '--cpus-per-task=16', '--mem=512G',
             '--gpus=0', '--gpus-per-task=0', '--gres=none', '--exact', '--exclusive',
             '--immediate=10', '--time=02:00:00', '--cpu-bind=cores', '--kill-on-bad-exit=1',
-            '--input=none', '--export=ALL', PYTHON, '-B', str(Path(__file__).resolve()),
+            '--input=none', '--export=ALL',
+            'env', 'CPU_ONLY=1', 'CUDA_VISIBLE_DEVICES=', 'HIP_VISIBLE_DEVICES=-1',
+            'ROCR_VISIBLE_DEVICES=-1', 'GPU_DEVICE_ORDINAL=-1',
+            PYTHON, '-B', str(Path(__file__).resolve()),
             'rank', '--launch-dir', str(launch_dir)]
 
 

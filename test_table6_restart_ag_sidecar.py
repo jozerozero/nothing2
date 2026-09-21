@@ -84,6 +84,15 @@ class SidecarTests(unittest.TestCase):
         self.assertNotIn('sbatch', command)
         self.assertNotIn('update', command)
 
+    def test_cpu_masks_are_applied_inside_task_after_slurm_rewrites(self):
+        command = side.srun_command('206116', 'node308', self.root)
+        environment_index = command.index('env')
+        self.assertGreater(environment_index, command.index('--export=ALL'))
+        self.assertEqual(command[environment_index:environment_index + 7],
+                         ['env', 'CPU_ONLY=1', 'CUDA_VISIBLE_DEVICES=', 'HIP_VISIBLE_DEVICES=-1',
+                          'ROCR_VISIBLE_DEVICES=-1', 'GPU_DEVICE_ORDINAL=-1', side.PYTHON])
+        self.assertEqual(side.STAGE.name, 'table6_autogluon_sidecar_20260922_v2')
+
     def test_budget_caps_long_parent_and_short_parent_without_renewal(self):
         value = side.capped_budget(self.raw(), '206116', 'node308', 100, 102, 1000, 'node308')
         self.assertEqual(value['remaining_seconds'], 6898)
