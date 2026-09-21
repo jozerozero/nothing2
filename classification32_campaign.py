@@ -217,6 +217,35 @@ def manifest_load():
     return man
 
 
+def refresh_prelaunch_code_pins():
+    """Allow audited code-only correction before any job/task has been submitted."""
+    for name in ('submission_state.json', 'claims', 'results', 'smoke', 'gates', 'preflight', 'bindings'):
+        require(not (ROOT / name).exists(), 'Cannot change a submitted/started campaign: ' + name)
+    jobs = subprocess.check_output(['squeue', '--me', '-h', '-o', '%i|%j'], text=True)
+    require(not any(line.split('|')[-1] == 'c32budget' for line in jobs.splitlines()),
+            'An active actual32 job exists; code refresh prohibited')
+    old = read(ROOT / 'manifest.json')
+    require(old['manifest_id'] == digest_obj({k: v for k, v in old.items() if k != 'manifest_id'}),
+            'Prelaunch manifest integrity error')
+    for row in old['rows']:
+        verify(row['cache'], full=True)
+    for config in old['models'].values():
+        model_verify(config)
+    own = [identity(rec['path']) for rec in old['code_files']]
+    archive = ROOT / 'prelaunch_manifests' / (old['manifest_id'] + '.json')
+    if archive.exists():
+        require(read(archive) == old, 'Prelaunch archive mismatch')
+    else:
+        atomic(archive, old)
+    new = {k: v for k, v in old.items() if k != 'manifest_id'}
+    new.update(code_files=own, prelaunch_previous_manifest_id=old['manifest_id'],
+               prelaunch_code_refresh_epoch=time.time())
+    new['manifest_id'] = digest_obj(new)
+    atomic(ROOT / 'manifest.json', new, immutable=False)
+    print(json.dumps({'code_pins_refreshed_before_any_submission': True,
+                      'manifest_id': new['manifest_id'], 'archived_previous': str(archive)}), flush=True)
+
+
 def model_verify(cfg):
     for key, rec in cfg.items():
         if key.endswith('_identity'):
@@ -289,12 +318,17 @@ def valid_result(path, man, model, row):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('mode', choices=('prepare', 'one'))
+    p.add_argument('mode', choices=('prepare', 'one', 'refresh-prelaunch-code'))
     p.add_argument('--model', choices=MODELS)
     p.add_argument('--index', type=int)
     p.add_argument('--smoke', action='store_true')
     args = p.parse_args()
-    prepare() if args.mode == 'prepare' else run_one(args)
+    if args.mode == 'prepare':
+        prepare()
+    elif args.mode == 'refresh-prelaunch-code':
+        refresh_prelaunch_code_pins()
+    else:
+        run_one(args)
 
 
 if __name__ == '__main__':

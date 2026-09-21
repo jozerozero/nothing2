@@ -48,7 +48,12 @@ def gpu_record():
     import torch
     campaign.require(torch.cuda.is_available() and torch.cuda.device_count() == 1 and torch.version.hip,
                      'Expected one actually available AMD GPU; environment strings alone are insufficient')
-    lib = ctypes.CDLL(ctypes.util.find_library('amdhip64') or '/opt/rocm/lib/libamdhip64.so')
+    from pfn_mitra_one import select_loaded_hip_library
+    torch.cuda.init()
+    torch.cuda.set_device(0)
+    library = select_loaded_hip_library(Path('/proc/self/maps').read_text())
+    campaign.require(hasattr(os, 'RTLD_NOLOAD'), 'Loaded-runtime-only HIP inspection required')
+    lib = ctypes.CDLL(str(library), mode=os.RTLD_NOLOAD | os.RTLD_LOCAL)
     fn = lib.hipDeviceGetPCIBusId
     fn.argtypes, fn.restype = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int], ctypes.c_int
     buf = ctypes.create_string_buffer(64)
@@ -61,6 +66,7 @@ def gpu_record():
     campaign.require(float(v.sum().cpu()) == 16, 'GPU forward probe failed')
     return {'node': socket.gethostname(), 'uuid': physical_uuid, 'pci': pci,
             'gpu_name': torch.cuda.get_device_name(0), 'hip': torch.version.hip,
+            'hip_runtime_library': str(library),
             'rank': int(os.environ['SLURM_PROCID']), 'job': os.environ['SLURM_JOB_ID'],
             'step': os.environ['SLURM_STEP_ID'], 'epoch': time.time()}
 
