@@ -137,7 +137,9 @@ def load_plan(plan_path):
     p = read(plan_path)
     assert p['plan_id'] == hashlib.sha256(json.dumps({k:v for k,v in p.items() if k != 'plan_id'}, sort_keys=True).encode()).hexdigest()
     assert p['manifest_sha256'] == digest(MANIFEST)
-    assert digest(MODEL_MANIFEST) == MODEL_SHA and digest(MITRA / 'weights_manifest.json') == MITRA_SHA
+    if p.get('model_manifest_sha256'):
+        assert digest(MODEL_MANIFEST) == p['model_manifest_sha256'] == MODEL_SHA
+    assert digest(MITRA / 'weights_manifest.json') == p['mitra_manifest_sha256'] == MITRA_SHA
     for name, h in p['worker_sha256'].items():
         assert digest(REPO / name) == h, 'Worker changed after campaign freeze: ' + name
     return p
@@ -148,24 +150,45 @@ def validate_result(path, model, index, man, plan):
     assert r['complete'] is True and r['model_name'] == model and r['dataset_index'] == index
     assert r['manifest_id'] == man['manifest_id'] and r['input_fingerprint'] == man['rows'][index]['input_fingerprint']
     assert r['dataset'] == man['rows'][index]['dataset'] and r['row_id'] == man['rows'][index]['row_id']
-    script = 'pfn_mitra_one.py' if model == 'mitra' else 'pfn_foundation_one.py'
+    script = plan.get('worker_scripts', {}).get(model, 'pfn_mitra_one.py' if model == 'mitra' else 'pfn_foundation_one.py')
     assert r['worker_source_sha256'] == plan['worker_sha256'][script]
     assert r['model_sha256'] == plan['model_weight_sha256'][model]
-    if model != 'mitra': assert r['model_manifest_sha256'] == plan['model_manifest_sha256']
+    if model not in ('mitra', 'taffy'): assert r['model_manifest_sha256'] == plan['model_manifest_sha256']
+    if plan.get('strict_actual8'):
+        assert r['actual8_verified'] is True and r['actual_ensemble_count'] == 8
+        assert r['ensemble_audit']['actual_ensemble_count'] == 8
     assert r['source_result_audit_match'] is True
     assert all(math.isfinite(r['metrics'][k]) for k in ('rmse', 'r2', 'mae'))
     return r
 
 
 def lane_run(plan, node, lane, ordinal, attempt, stop):
+    if not plan.get('gpu_lock_dir'):
+        return _lane_run(plan, node, lane, ordinal, attempt, stop)
+    lock_root = Path(plan['gpu_lock_dir'])
+    lock_root.mkdir(parents=True, exist_ok=True)
+    lock_name = node['node'] + '.' + lane['gpu']['uuid']
+    assert re.fullmatch(r'[a-zA-Z0-9_.-]+', lock_name)
+    with (lock_root / (lock_name + '.lock')).open('a') as physical_lock:
+        fcntl.flock(physical_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return _lane_run(plan, node, lane, ordinal, attempt, stop)
+
+
+def _lane_run(plan, node, lane, ordinal, attempt, stop):
     import psutil
     man = read(MANIFEST)
     model = lane['model']; g = lane['gpu']
-    identity = node['parent'] + '.' + os.environ['SLURM_STEP_ID'] + '.' + model
+    lane_id = lane.get('lane_id', model)
+    assert re.fullmatch(r'[a-zA-Z0-9_-]+', lane_id)
+    indices = lane.get('dataset_indices', plan['dataset_indices'])
+    target = lane.get('target_count', len(indices))
+    assert target == len(indices) and len(set(indices)) == target
+    identity = node['parent'] + '.' + os.environ['SLURM_STEP_ID'] + '.' + lane_id
     status_path = ROOT / 'workers' / (identity + '.json')
     status = {'worker': identity, 'model': model, 'node': node['node'], 'parent': node['parent'],
               'step': os.environ['SLURM_STEP_ID'], 'gpu': g, 'plan_id': plan['plan_id'],
-              'started_epoch': time.time(), 'state': 'starting', 'completed': 0}
+              'started_epoch': time.time(), 'state': 'starting', 'completed': 0,
+              'lane_id': lane_id, 'target': target, 'failed': 0}
     atomic(status_path, status)
     fresh = gpu(g['uuid'])
     assert fresh['pci'] == g['pci'] and check_idle(fresh), 'Assigned GPU no longer idle'
@@ -177,7 +200,7 @@ def lane_run(plan, node, lane, ordinal, attempt, stop):
     cpus = sorted(os.sched_getaffinity(0))[ordinal * 4: (ordinal + 1) * 4]
     assert len(cpus) == 4
     try:
-        for index in plan['dataset_indices']:
+        for index in indices:
             if stop.is_set():
                 raise RuntimeError('Node dispatcher stop requested')
             output = ROOT / 'results' / model / f'row-{index:03d}.json'
@@ -197,13 +220,13 @@ def lane_run(plan, node, lane, ordinal, attempt, stop):
                     validate_result(output, model, index, man, plan); status['completed'] += 1; continue
                 source = FT / 'eval224/results/step-22175' / f'row-{index:03d}.json'
                 assert source.is_file()
-                script = 'pfn_mitra_one.py' if model == 'mitra' else 'pfn_foundation_one.py'
+                script = plan.get('worker_scripts', {}).get(model, 'pfn_mitra_one.py' if model == 'mitra' else 'pfn_foundation_one.py')
                 cmd = ['taskset', '-c', ','.join(map(str, cpus)), lane['python'], str(REPO / script),
                        '--manifest', str(MANIFEST), '--dataset-index', str(index), '--source-result', str(source),
                        '--output', str(output), '--threads', '4']
                 if model == 'mitra':
                     cmd += ['--mitra-stage', str(MITRA), '--weights-manifest', str(MITRA / 'weights_manifest.json')]
-                else:
+                elif model != 'taffy':
                     cmd += ['--model-manifest', str(MODEL_MANIFEST), '--model-manifest-sha256', MODEL_SHA,
                             '--model-name', model, '--test-chunk', '4096']
                 status.update(state='running', dataset_index=index, heartbeat_epoch=time.time())
@@ -242,16 +265,25 @@ def lane_run(plan, node, lane, ordinal, attempt, stop):
                 status.update(heartbeat_epoch=time.time(), last_result=str(output), last_peak_rss_gib=peak/GIB,
                               smoke_passed=True, last_metrics=result['metrics'])
                 atomic(status_path, status)
-                print(json.dumps({'model': model, 'complete': status['completed'], 'target': 28,
+                print(json.dumps({'model': model, 'lane_id': lane_id, 'complete': status['completed'], 'target': target,
                                   'dataset_index': index, 'elapsed_s': time.monotonic()-started}), flush=True)
             except Exception as exc:
                 error = {**record, 'complete': False, 'reason': str(exc), 'log': str(log),
                          'peak_rss_gib': peak/GIB, 'epoch': time.time(), 'returncode': proc.returncode if proc else None}
                 atomic(ROOT / 'errors' / attempt / model / f'row-{index:03d}.json', error, True)
-                raise
+                status['failed'] += 1
+                status.update(state='dataset_failed', last_error=error, heartbeat_epoch=time.time())
+                atomic(status_path, status)
+                # A launched evaluator may fail on one dataset without losing
+                # the remaining disjoint shard. Never continue a safety-stop,
+                # occupied GPU, missing source, or other pre-launch failure.
+                if not plan.get('continue_errors') or stop.is_set() or proc is None:
+                    raise
             finally:
                 if proc is not None: stop_own(proc)
                 if claim.exists() and read(claim).get('token') == token: claim.unlink()
+        if status['failed']:
+            raise RuntimeError(f"{status['failed']} bounded dataset failures; evidence retained, no retries")
         status.update(state='complete', complete=True, ended_epoch=time.time())
         atomic(status_path, status)
     except Exception as exc:
@@ -288,13 +320,18 @@ def launch(attempt, plan_path, only_parent=None):
             if only_parent and parent != only_parent: continue
             assert checked_fields(parent)['NodeList'] == node['node']
             active = subprocess.check_output(['squeue', '--steps', '-j', parent, '-h', '-o', '%i|%j'], text=True)
-            assert 'pfn28base' not in active and 'regft50eval' not in active, 'Existing evaluator on selected parent'
+            job_name = p.get('job_name', 'pfn28base')
+            assert re.fullmatch(r'[a-zA-Z0-9_-]+', job_name)
+            blocked_names = p.get('blocked_step_names', ['pfn28base', 'regft50eval'])
+            assert all(name not in active for name in set(blocked_names + [job_name])), 'Existing evaluator on selected parent'
             path = ROOT / 'launches' / (attempt + '.' + parent + '.json')
             if path.exists(): continue
             cmd = ['srun', '--jobid='+parent, '--overlap', '--exact', '-N1', '-n1', '-c'+str(node['cpus']),
                    '--mem='+str(node['mem_gib'])+'G', '--gpus=8', '--gpu-bind=none', '--time=02:00:00',
-                   '--unbuffered', '--job-name=pfn28base', sys.executable, str(REPO / 'pfn28_dispatch.py'),
+                   '--unbuffered', '--job-name='+job_name, sys.executable, str(REPO / 'pfn28_dispatch.py'),
                    'node', '--parent', parent, '--attempt', attempt, '--plan', str(plan_path)]
+            if p.get('dispatcher_script'):
+                cmd[cmd.index(str(REPO / 'pfn28_dispatch.py'))] = str(REPO / p['dispatcher_script'])
             # The pre-existing parent owns all8 GPUs. Expose them to this child,
             # but each evaluator is isolated to one audited physical UUID.
             log = path.with_suffix('.log'); log.parent.mkdir(parents=True, exist_ok=True)
