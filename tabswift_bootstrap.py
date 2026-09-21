@@ -32,7 +32,7 @@ def main():
     if not environment.exists():
         subprocess.run([sys.executable,'-m','venv','--system-site-packages',str(environment)],check=True)
     python = environment/'bin/python'
-    subprocess.run([str(python),'-m','pip','install','--disable-pip-version-check','--no-deps',
+    subprocess.run([str(python),'-m','pip','install','--disable-pip-version-check',
                     'scikit-learn==1.6.1','category-encoders==2.8.1'],check=True)
     weights = STAGE/'weights'; weights.mkdir(exist_ok=True)
     target = weights/'swift.ckpt'
