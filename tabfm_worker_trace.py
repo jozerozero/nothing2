@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import signal
 import sys
+import tempfile
 import tabfm_existing_sidecar_v2 as sidecar
 import tabfm_default_dispatch as frozen
 
@@ -14,6 +15,8 @@ def main():
     plan, man, tasks = sidecar.load_plan(sys.argv[1])
     sidecar.query_parent(plan)
     env = sidecar.lane_environment(plan, os.environ)
+    local_tmp = tempfile.mkdtemp(prefix='tfm-', dir='/tmp')
+    env['TMPDIR'] = local_tmp
     os.environ.clear()
     os.environ.update(env)
     os.nice(19)
@@ -25,20 +28,20 @@ def main():
     actual = gpu_identity(torch)
     owner = {'rank': 0, 'job': sidecar.PARENT, 'step': os.environ['SLURM_STEP_ID'],
              'node': sidecar.NODE, 'uuid': actual['uuid'], 'pci': actual['pci_bus_id']}
-    diagnostic = dict(man, output_root=str(Path(man['output_root']) / 'diagnostics' / 'native-smoke-trace1'))
+    diagnostic = dict(man, output_root=str(Path(man['output_root']) / 'diagnostics' / 'native-smoke-shorttmp1'))
     task = frozen.smoke_tasks(man, tasks)[0]
     original = frozen.worker_environment
     def traced_env(manifest, owner):
         env = original(manifest, owner)
-        env.update(PYTHONFAULTHANDLER='1', PYTHONUNBUFFERED='1')
+        env.update(PYTHONFAULTHANDLER='1', PYTHONUNBUFFERED='1', TMPDIR=local_tmp)
         return env
     frozen.worker_environment = traced_env
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM):
         signal.signal(sig, frozen.stop)
-    signal.alarm(240)
+    signal.alarm(600)
     frozen.require(frozen.claim(diagnostic, task, owner, smoke=True), 'Diagnostic already attempted')
     events = []
-    print('DIAGNOSTIC_START', json.dumps(owner), flush=True)
+    print('DIAGNOSTIC_START', json.dumps({'owner': owner, 'TMPDIR': local_tmp}), flush=True)
     with sidecar.operational_watchdog(events):
         ok = frozen.launch(diagnostic, Path(plan['campaign_path']), task, owner, smoke=True)
     print('DIAGNOSTIC_DONE', json.dumps({'success': ok, 'events': events}), flush=True)
