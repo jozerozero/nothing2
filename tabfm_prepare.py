@@ -49,7 +49,7 @@ def prepare():
         verify_manifest(man)
         require(len(man['rows']) == size and man['membership_count'] == size, 'Membership count mismatch')
         require([r['dataset_index'] for r in man['rows']] == list(range(size)), 'Membership order mismatch')
-    plan_path = BASE / 'evaluation/table6_remaining19_standard_hpo_bg8_20260912_v1/plan.json'
+    plan_path = BASE / 'stage/table6_remaining19_standard_hpo_bg8_20260912_v1/plan.json'
     plan = read(plan_path)
     rows = {r['dataset']:r for r in plan['rows'] if r['task_kind'] == 'classification'}
     require(len(rows) == 457, 'Raw classification membership mismatch')
