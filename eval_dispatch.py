@@ -16,6 +16,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -99,7 +100,21 @@ def stop_own(proc):
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL);proc.wait(timeout=15)
 
-def worker(cfg, g, ordinal, manifest_path, root, deadline):
+def completed_output(path, man, ckpt, row):
+    obj=read(path)
+    assert obj.get('complete') is True and obj['checkpoint_step']==ckpt['step']
+    assert obj['dataset_index']==row['dataset_index'] and obj['manifest_id']==man['manifest_id']
+    return obj
+
+def owned_rss(psutil):
+    total=0
+    for p in psutil.process_iter(['uids','memory_info']):
+        try:
+            if p.info['uids'].real==os.getuid():total+=p.info['memory_info'].rss
+        except (psutil.NoSuchProcess,psutil.AccessDenied):pass
+    return total
+
+def worker(cfg, g, ordinal, manifest_path, root, deadline, stop):
     import psutil
     man=read(manifest_path)
     identity=f"{cfg['parent']}.{os.environ.get('SLURM_STEP_ID','unknown')}.{g['uuid']}"
@@ -125,7 +140,7 @@ def worker(cfg, g, ordinal, manifest_path, root, deadline):
     try:
         for ckpt in order:
             for row in rows:
-                if time.time()>deadline: return
+                if time.time()>deadline or stop.is_set(): return
                 key=f"step-{ckpt['step']}/row-{row['dataset_index']:03d}"
                 result=root/'results'/f'{key}.json'; error=root/'errors'/f'{key}.json'
                 claim=root/'claims'/f'{key}.json'
@@ -137,6 +152,14 @@ def worker(cfg, g, ordinal, manifest_path, root, deadline):
                 try:
                     with claim.open('x') as h:json.dump(owner,h);h.flush();os.fsync(h.fileno())
                 except FileExistsError:continue
+                # Another worker may have finished after our initial existence
+                # check and before this claim. Recheck under our new claim.
+                if result.exists() or error.exists():
+                    try:
+                        if result.exists():completed_output(result,man,ckpt,row)
+                    finally:
+                        if read(claim).get('worker')==identity:claim.unlink()
+                    continue
                 log=root/'logs'/f'{key}.log';log.parent.mkdir(parents=True,exist_ok=True)
                 cmd=['taskset','-c',','.join(map(str,worker_cpus)),sys.executable,
                     str(Path(__file__).with_name('eval_one.py')),'--manifest',str(manifest_path),
@@ -163,6 +186,11 @@ def worker(cfg, g, ordinal, manifest_path, root, deadline):
                             except (psutil.NoSuchProcess,psutil.AccessDenied):rss=0
                             if rss>cfg['rss_limit_gib']*GIB:
                                 reason='own evaluator exceeded reserved host RAM budget';stop_own(proc);break
+                            if stop.is_set():
+                                reason='node evaluator received stop request';stop_own(proc);break
+                            if owned_rss(psutil)>(cfg['parent_memory_gib']-8)*GIB:
+                                reason='parent RAM safety headroom reached; stopping own evaluators only'
+                                stop.set();stop_own(proc);break
                             if time.time()-begin>5400 or time.time()>deadline:
                                 reason='bounded evaluator runtime reached';stop_own(proc);break
                             if time.time()-last>60:
@@ -171,9 +199,7 @@ def worker(cfg, g, ordinal, manifest_path, root, deadline):
                             try:proc.wait(timeout=5)
                             except subprocess.TimeoutExpired:pass
                     if proc.returncode==0 and result.exists():
-                        obj=read(result)
-                        assert obj.get('complete') is True and obj['checkpoint_step']==ckpt['step']
-                        assert obj['dataset_index']==row['dataset_index']
+                        completed_output(result,man,ckpt,row)
                         done+=1
                     else:
                         failures+=1
@@ -195,12 +221,16 @@ def node_run(a):
     plan=read(a.plan); cfg=next(n for n in plan['nodes'] if n['parent']==a.parent)
     assert os.environ.get('SLURM_JOB_ID')==a.parent and socket.gethostname()==cfg['node']
     root=Path(a.manifest).parent
-    signal.signal(signal.SIGTERM,lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    stop=threading.Event()
+    signal.signal(signal.SIGTERM,lambda *_: stop.set())
+    signal.signal(signal.SIGINT,lambda *_: stop.set())
     deadline=time.time()+19.5*3600
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(cfg['gpus'])) as pool:
-        futures=[pool.submit(worker,cfg,g,cfg['offset']+i,Path(a.manifest),root,deadline)
+        futures=[pool.submit(worker,cfg,g,cfg['offset']+i,Path(a.manifest),root,deadline,stop)
                  for i,g in enumerate(cfg['gpus'])]
-        for f in futures:f.result()
+        try:
+            for f in concurrent.futures.as_completed(futures):f.result()
+        finally:stop.set()
 
 def launch(a):
     root=Path(a.manifest).parent; plan=read(a.plan)
