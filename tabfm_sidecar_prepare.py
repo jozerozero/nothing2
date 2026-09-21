@@ -98,9 +98,12 @@ def prepare(man, root):
               'used_vram_bytes': check_parent(r)[0]['vram'], 'gpu_busy_percent': 0} for r in (a, b)],
             'startup_other_rss_bytes': check_parent(b)[1], 'free_cpu_cores': free,
             'all8_gpu_reservation_verified': True, 'resources_available_verified': True,
-            'inherited_cpu_count': 64 if SIDECAR_SCRIPT.endswith('_v2.py') else 4,
+            'inherited_cpu_count': 64 if SIDECAR_SCRIPT.endswith(('_v2.py', '_v3.py')) else 4,
             'resource_budget_note': 'One existing GPU; extra guard32GiB own /60GiB sameuid total; model defaults unchanged',
             'cpu_observation': {'seconds': elapsed, 'existing_cpu_cores': cpu / elapsed}}
+    if SIDECAR_SCRIPT.endswith('_v3.py'):
+        plan['source_records'] = [identity(Path(__file__).with_name('tabfm_local_tmp.py'))]
+        plan['runtime_TMPDIR_override'] = 'private tempfile.mkdtemp(prefix=tfm-, dir=/tmp); only TMPDIR changes'
     plan['plan_id'] = digest(plan)
     atomic(man, root / 'plan.json', plan)
     print(json.dumps(plan, sort_keys=True))
@@ -110,11 +113,16 @@ def main():
     global SIDECAR, SIDECAR_SCRIPT
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['cpu-snapshot', 'probe1', 'probe2', 'prepare', 'launch'])
-    parser.add_argument('--cpu-binding-v2', action='store_true')
+    versions = parser.add_mutually_exclusive_group()
+    versions.add_argument('--cpu-binding-v2', action='store_true')
+    versions.add_argument('--local-tmp-v3', action='store_true')
     args = parser.parse_args()
     if args.cpu_binding_v2:
         SIDECAR = 'existing196092-single-20260922-v2'
         SIDECAR_SCRIPT = 'tabfm_existing_sidecar_v2.py'
+    elif args.local_tmp_v3:
+        SIDECAR = 'existing196092-single-20260922-v3'
+        SIDECAR_SCRIPT = 'tabfm_existing_sidecar_v3.py'
     if args.mode == 'cpu-snapshot':
         print(json.dumps(cpu_snapshot()))
         return
