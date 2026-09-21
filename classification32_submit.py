@@ -58,8 +58,13 @@ def verify_job(job_id, raw, script, *, held, run=command):
     require(fields.get("NtasksPerN:B:S:C", "").split(":")[0] == "4", f"Job {job_id} must run four tasks per node")
     require("gres/gpu=4" in fields.get("ReqTRES", "").split(","), f"Job {job_id} must request four GPUs")
     require(fields.get("TresPerTask") == "cpu=4,gres/gpu=1", f"Job {job_id} must reserve one GPU/four CPUs per task")
-    excluded = set(run(["scontrol", "show", "hostnames", fields.get("ExcNodeList", "")]).splitlines())
-    require(EXCLUDED_NODES <= excluded, f"Job {job_id} lost required excluded nodes")
+    exc = fields.get("ExcNodeList", "")
+    require(exc not in ("", "(null)", "None"), f"Job {job_id} lost its excluded-node constraint")
+    excluded = set(run(["scontrol", "show", "hostnames", exc]).splitlines())
+    # Slurm may omit currently ineligible nodes from this display. The full
+    # requested list is frozen in the submission receipt and checked again
+    # against the actual node at GPU preflight.
+    require(excluded <= EXCLUDED_NODES, f"Job {job_id} has unexpected excluded nodes")
     for key in ("NodeList", "SchedNodeList"):
         if fields.get(key) not in (None, "(null)", "None"):
             assigned = set(run(["scontrol", "show", "hostnames", fields[key]]).splitlines())

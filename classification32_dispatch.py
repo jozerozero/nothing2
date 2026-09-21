@@ -46,6 +46,8 @@ def stop(_sig, _frame):
 
 def gpu_record():
     import torch
+    from classification32_submit import EXCLUDED_NODES
+    campaign.require(socket.gethostname().split('.')[0] not in EXCLUDED_NODES, 'Assigned an excluded node')
     campaign.require(torch.cuda.is_available() and torch.cuda.device_count() == 1 and torch.version.hip,
                      'Expected one actually available AMD GPU; environment strings alone are insufficient')
     from pfn_mitra_one import select_loaded_hip_library
