@@ -7,6 +7,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 
 HERE = Path(__file__).resolve().parent
@@ -125,6 +126,93 @@ class PFNMitraTests(unittest.TestCase):
         self.assertEqual(worker.sha256_file(HERE / "eval_one.py"), worker.RAW_LOADER_SHA256)
         historical = HERE.parents[1] / "mitra_all_classification_regression_20260823_v3/mitra_common.py"
         self.assertEqual(worker.sha256_file(historical), worker.HISTORICAL_ADAPTER_SHA256)
+
+
+class LoadedHipBindingTests(unittest.TestCase):
+    def test_mapped_segments_and_symlink_resolve_one_runtime(self):
+        with tempfile.TemporaryDirectory(prefix="test-pfn-mitra-hip-") as temporary:
+            library = Path(temporary) / "libamdhip64.so.6.0"
+            library.write_bytes(b"fake; never dlopen in unit tests")
+            symlink = Path(temporary) / "libamdhip64.so"
+            symlink.symlink_to(library.name)
+            maps = (f"000-001 r-xp 0000 00:00 1 {library}\n"
+                    f"002-003 r--p 0000 00:00 1 {library}\n"
+                    f"004-005 r--p 0000 00:00 1 {symlink}\n"
+                    "006-007 rw-p 0000 00:00 0 [heap]\n")
+            self.assertEqual(worker.select_loaded_hip_library(maps), library.resolve())
+
+    def test_no_loaded_runtime_fails_without_system_fallback(self):
+        with self.assertRaisesRegex(RuntimeError, "exactly one"):
+            worker.select_loaded_hip_library("000-001 rw-p 0000 00:00 0 [heap]\n")
+
+    def test_multiple_loaded_hip_versions_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="test-pfn-mitra-hip-") as temporary:
+            paths = [Path(temporary) / f"libamdhip64.so.{v}" for v in (6, 7)]
+            for path in paths:
+                path.write_bytes(b"fake")
+            maps = "\n".join(f"000-001 r-xp 0000 00:00 1 {path}" for path in paths)
+            with self.assertRaisesRegex(RuntimeError, "exactly one"):
+                worker.select_loaded_hip_library(maps)
+
+    def test_relative_and_deleted_runtime_rejected(self):
+        for path in ("libamdhip64.so.6", "/tmp/libamdhip64.so.6 (deleted)"):
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, "absolute library path"):
+                worker.select_loaded_hip_library(f"000-001 r-xp 0000 00:00 1 {path}")
+
+    def test_gpu_visibility_rejected_before_reading_maps(self):
+        for available, count in ((False, 0), (True, 2)):
+            torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: available,
+                                                         device_count=lambda: count))
+            with self.subTest(available=available, count=count), \
+                    patch.object(Path, "read_text", side_effect=AssertionError("no maps read")), \
+                    self.assertRaisesRegex(RuntimeError, "Exactly one"):
+                worker.gpu_identity(torch)
+
+    def fake_torch(self):
+        smoke = SimpleNamespace(sum=lambda: SimpleNamespace(cpu=lambda: 16))
+        return SimpleNamespace(version=SimpleNamespace(hip="6.4.test"), float32="FP32",
+            ones=Mock(return_value=smoke),
+            cuda=SimpleNamespace(is_available=lambda: True, device_count=lambda: 1,
+                init=Mock(), set_device=Mock(), get_device_name=lambda _: "AMD test",
+                get_device_properties=lambda _: SimpleNamespace(total_memory=100)))
+
+    def binding_contexts(self, torch, returned_pci=b"0000:47:00.0", returned_uuid="test-uuid"):
+        def lookup(buffer, _size, device):
+            self.assertEqual(device, 0)
+            buffer.value = returned_pci
+            return 0
+        fake_library = SimpleNamespace(hipDeviceGetPCIBusId=Mock(side_effect=lookup))
+        def read(path, *args, **kwargs):
+            if str(path) == "/proc/self/maps":
+                return "mock maps"
+            if str(path) == "/sys/bus/pci/devices/0000:47:00.0/unique_id":
+                return returned_uuid + "\n"
+            raise AssertionError(f"Unexpected file read: {path}")
+        return (patch.dict(worker.os.environ, {"EXPECTED_GPU_UUID": "GPU-test-uuid",
+                    "EXPECTED_GPU_PCI_BUS_ID": "0000:47:00.0"}),
+                patch.object(Path, "read_text", read),
+                patch.object(worker, "select_loaded_hip_library", return_value=Path("/torch/lib/libamdhip64.so.6")),
+                patch.object(worker.ctypes, "CDLL", return_value=fake_library),
+                patch.object(worker.os, "RTLD_NOLOAD", 4, create=True))
+
+    def test_loaded_runtime_noload_and_physical_compute_audit(self):
+        torch = self.fake_torch()
+        environment, files, select, cdll, noload = self.binding_contexts(torch)
+        with environment, files, select, cdll as load, noload:
+            audit = worker.gpu_identity(torch)
+            load.assert_called_once_with("/torch/lib/libamdhip64.so.6", mode=4 | worker.os.RTLD_LOCAL)
+        self.assertEqual(audit["hip_runtime_library"], "/torch/lib/libamdhip64.so.6")
+        self.assertEqual(audit["uuid"], "test-uuid")
+        torch.cuda.init.assert_called_once_with()
+        torch.cuda.set_device.assert_called_once_with(0)
+        torch.ones.assert_called_once_with((4, 4), dtype="FP32", device="cuda:0")
+
+    def test_physical_gpu_mismatch_rejected_before_compute(self):
+        torch = self.fake_torch()
+        environment, files, select, cdll, noload = self.binding_contexts(torch, returned_uuid="wrong-uuid")
+        with environment, files, select, cdll, noload, self.assertRaisesRegex(RuntimeError, "Physical GPU mismatch"):
+            worker.gpu_identity(torch)
+        torch.ones.assert_not_called()
 
 
 if __name__ == "__main__":

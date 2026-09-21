@@ -85,7 +85,7 @@ def runtime(model):
     return str(py), env
 
 
-def build_plan():
+def build_plan(plan_path, only_parent=None):
     assert digest(MODEL_MANIFEST) == MODEL_SHA
     assert digest(MITRA / 'weights_manifest.json') == MITRA_SHA
     man = read(MANIFEST)
@@ -98,6 +98,7 @@ def build_plan():
     after = {p['parent']: p for p in second['parents']}
     nodes = []
     for parent, models in ASSIGNMENTS.items():
+        if only_parent and parent != only_parent: continue
         a, b = before[parent], after[parent]
         assert not any(x.get('error') or x.get('excluded') for x in (a, b))
         f = checked_fields(parent)
@@ -117,21 +118,23 @@ def build_plan():
     scripts = ['pfn28_dispatch.py', 'pfn_foundation_one.py', 'pfn_mitra_one.py', 'eval_one.py', 'eval_dispatch.py']
     plan = {'created_epoch': time.time(), 'manifest': str(MANIFEST), 'manifest_id': man['manifest_id'],
             'manifest_sha256': digest(MANIFEST), 'model_manifest_sha256': MODEL_SHA,
-            'mitra_manifest_sha256': MITRA_SHA, 'target_results': 196, 'models': sum(ASSIGNMENTS.values(), []),
+            'mitra_manifest_sha256': MITRA_SHA,
+            'target_results': 28 * sum(len(n['lanes']) for n in nodes),
+            'models': [lane['model'] for n in nodes for lane in n['lanes']],
             'source_checkpoint_step': 22175, 'dataset_indices': [r['dataset_index'] for r in sorted(rows,
                 key=lambda r: (sum(f['size_bytes'] for f in r['input_files']), r['dataset_index']))],
-            'nodes': nodes, 'actual_gpu_workers': 7, 'row_rss_limit_gib': 20,
+            'nodes': nodes, 'actual_gpu_workers': sum(len(n['lanes']) for n in nodes), 'row_rss_limit_gib': 20,
             'hard_step_limit': '02:00:00', 'parent_allocations_unchanged': True,
             'new_allocations': False, 'worker_sha256': {p: digest(REPO / p) for p in scripts}}
     plan['model_weight_sha256'] = {m['name']: m['sha256'] for m in read(MODEL_MANIFEST)['models']}
     plan['model_weight_sha256']['mitra'] = 'd8e75c62af0bec2fd404b0ad20a442d951d43ca6d331315cfcc0509b54f2c642'
     plan['plan_id'] = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
-    atomic(ROOT / 'plan.json', plan, True)
+    atomic(plan_path, plan, True)
     print(json.dumps(plan), flush=True)
 
 
-def load_plan():
-    p = read(ROOT / 'plan.json')
+def load_plan(plan_path):
+    p = read(plan_path)
     assert p['plan_id'] == hashlib.sha256(json.dumps({k:v for k,v in p.items() if k != 'plan_id'}, sort_keys=True).encode()).hexdigest()
     assert p['manifest_sha256'] == digest(MANIFEST)
     assert digest(MODEL_MANIFEST) == MODEL_SHA and digest(MITRA / 'weights_manifest.json') == MITRA_SHA
@@ -258,9 +261,9 @@ def lane_run(plan, node, lane, ordinal, attempt, stop):
         raise
 
 
-def node_run(parent, attempt):
+def node_run(parent, attempt, plan_path):
     import psutil
-    p = load_plan(); node = next(n for n in p['nodes'] if n['parent'] == parent)
+    p = load_plan(plan_path); node = next(n for n in p['nodes'] if n['parent'] == parent)
     assert os.environ['SLURM_JOB_ID'] == parent and socket.gethostname() == node['node']
     assert checked_fields(parent)['NodeList'] == node['node']
     assert owned_rss(psutil) < 8*GIB and psutil.virtual_memory().available > 56*GIB
@@ -275,8 +278,8 @@ def node_run(parent, attempt):
     if errors: raise RuntimeError(errors)
 
 
-def launch(attempt, only_parent=None):
-    p = load_plan()
+def launch(attempt, plan_path, only_parent=None):
+    p = load_plan(plan_path)
     assert time.time() - p['created_epoch'] < 1800, 'Plan too old; resource audit required'
     with (ROOT / 'launch.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -291,7 +294,7 @@ def launch(attempt, only_parent=None):
             cmd = ['srun', '--jobid='+parent, '--overlap', '--exact', '-N1', '-n1', '-c'+str(node['cpus']),
                    '--mem='+str(node['mem_gib'])+'G', '--gpus=8', '--gpu-bind=none', '--time=02:00:00',
                    '--unbuffered', '--job-name=pfn28base', sys.executable, str(REPO / 'pfn28_dispatch.py'),
-                   'node', '--parent', parent, '--attempt', attempt]
+                   'node', '--parent', parent, '--attempt', attempt, '--plan', str(plan_path)]
             # The pre-existing parent owns all8 GPUs. Expose them to this child,
             # but each evaluator is isolated to one audited physical UUID.
             log = path.with_suffix('.log'); log.parent.mkdir(parents=True, exist_ok=True)
@@ -307,7 +310,10 @@ def launch(attempt, only_parent=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(); parser.add_argument('mode', choices=['plan', 'launch', 'node'])
     parser.add_argument('--parent'); parser.add_argument('--attempt', default='v1')
+    parser.add_argument('--plan', type=Path, default=ROOT / 'plan.json')
     args = parser.parse_args(); assert re.fullmatch(r'[a-zA-Z0-9_-]+', args.attempt)
-    if args.mode == 'plan': build_plan()
-    elif args.mode == 'node': node_run(args.parent, args.attempt)
-    else: launch(args.attempt, args.parent)
+    assert args.plan.resolve().parent == ROOT.resolve(), 'Plan must stay in campaign root'
+    if args.parent: assert args.parent in ASSIGNMENTS
+    if args.mode == 'plan': build_plan(args.plan, args.parent)
+    elif args.mode == 'node': node_run(args.parent, args.attempt, args.plan)
+    else: launch(args.attempt, args.plan, args.parent)

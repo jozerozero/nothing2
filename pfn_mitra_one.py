@@ -11,6 +11,7 @@ No downloads, training, resplitting, implicit fallback, or result overwrite.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import importlib.metadata
 import json
@@ -51,6 +52,70 @@ def sha256_file(path):
         for block in iter(lambda: handle.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def select_loaded_hip_library(maps_text):
+    """Resolve one already-mapped HIP runtime, never a system/default library."""
+    libraries = set()
+    for line in maps_text.splitlines():
+        columns = line.split(maxsplit=5)
+        if len(columns) != 6:
+            continue
+        name = columns[5]
+        basename = Path(name.removesuffix(" (deleted)")).name
+        if basename != "libamdhip64.so" and not basename.startswith("libamdhip64.so."):
+            continue
+        path = Path(name)
+        common.require(path.is_absolute() and not name.endswith(" (deleted)"),
+                       "Mapped HIP runtime must be an existing absolute library path")
+        resolved = path.resolve(strict=True)
+        common.require(resolved.is_file(), f"Mapped HIP runtime is not a file: {resolved}")
+        libraries.add(resolved)
+    common.require(len(libraries) == 1,
+                   f"Expected exactly one Torch-loaded HIP runtime, found: {sorted(map(str, libraries))}")
+    return next(iter(libraries))
+
+
+def gpu_identity(torch):
+    """Keep strict physical binding while using Torch's own loaded HIP runtime.
+
+    The historical Mitra environment can use an older ROCm wheel than the
+    system /opt/rocm runtime. Loading the system HIP library into that process
+    mixes incompatible HSA symbols. RTLD_NOLOAD deliberately permits only the
+    unique runtime already mapped after Torch initializes its selected device.
+    """
+    common.require(torch.cuda.is_available() and torch.cuda.device_count() == 1,
+                   "Exactly one CUDA/ROCm GPU must be visible to the runtime")
+    common.require(bool(torch.version.hip), "This sidecar requires the allocated AMD ROCm runtime")
+    expected_uuid = os.environ.get("EXPECTED_GPU_UUID", "").lower().removeprefix("gpu-")
+    expected_pci = os.environ.get("EXPECTED_GPU_PCI_BUS_ID", "").lower()
+    common.require(expected_uuid and expected_pci,
+                   "EXPECTED_GPU_UUID and EXPECTED_GPU_PCI_BUS_ID are mandatory")
+    torch.cuda.init()
+    torch.cuda.set_device(0)
+    library_path = select_loaded_hip_library(Path("/proc/self/maps").read_text())
+    common.require(hasattr(os, "RTLD_NOLOAD"), "RTLD_NOLOAD is required for loaded-runtime binding")
+    lib = ctypes.CDLL(str(library_path), mode=os.RTLD_NOLOAD | os.RTLD_LOCAL)
+    fn = lib.hipDeviceGetPCIBusId
+    fn.argtypes, fn.restype = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int], ctypes.c_int
+    buffer = ctypes.create_string_buffer(64)
+    common.require(fn(buffer, len(buffer), 0) == 0, "HIP physical PCI lookup failed")
+    domain, bus, slot = buffer.value.decode().lower().split(":")
+    pci = f"{int(domain, 16):04x}:{bus}:{slot}"
+    uuid = (Path("/sys/bus/pci/devices") / pci / "unique_id").read_text().strip().lower()
+    common.require(uuid == expected_uuid and pci == expected_pci,
+                   f"Physical GPU mismatch: {(uuid, pci)}")
+    smoke = torch.ones((4, 4), dtype=torch.float32, device="cuda:0")
+    common.require(float(smoke.sum().cpu()) == 16, "GPU compute binding probe failed")
+    del smoke
+    return {"uuid": uuid, "pci_bus_id": pci, "runtime_visible_count": 1,
+            "name": torch.cuda.get_device_name(0), "hip_version": str(torch.version.hip),
+            "hip_runtime_library": str(library_path),
+            "hip_runtime_selection": "unique Torch-loaded /proc/self/maps library; RTLD_NOLOAD",
+            "total_memory_bytes": torch.cuda.get_device_properties(0).total_memory,
+            "ROCR_VISIBLE_DEVICES": os.environ.get("ROCR_VISIBLE_DEVICES"),
+            "CUDA_VISIBLE_DEVICES": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "HIP_VISIBLE_DEVICES": os.environ.get("HIP_VISIBLE_DEVICES")}
 
 
 def load_source_result(path, manifest, row, checkpoint):
@@ -197,7 +262,7 @@ def main(argv=None):
     from threadpoolctl import threadpool_limits
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
-    physical_gpu = common.gpu_identity(torch)
+    physical_gpu = gpu_identity(torch)
     torch.cuda.reset_peak_memory_stats(0)
     with threadpool_limits(limits=args.threads):
         support, ys, test, yt, data_audit, TargetTransform, transform_record = common.load_raw_data(
