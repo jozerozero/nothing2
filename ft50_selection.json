@@ -1,0 +1,200 @@
+{
+  "source_csv": "/Users/lizijian/Downloads/dataset_comparison_step22175(in).csv",
+  "source_csv_sha256": "ab3409aab59d4e54c1666df2de35bcf52d0000af91cb2b451748e80e1c273337",
+  "source_step": 22175,
+  "selection_count": 19,
+  "datasets": [
+    {
+      "suite": "BCCO",
+      "dataset": "Brazilian_houses",
+      "n_train": 7484,
+      "n_test": 3208,
+      "rmse_excess_pct": 101.04820924315887,
+      "r2_gap": 0.12068400303912419,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "measured"
+    },
+    {
+      "suite": "CTR23",
+      "dataset": "geographical_origin_of_music",
+      "n_train": 953,
+      "n_test": 106,
+      "rmse_excess_pct": 3.791041586542465,
+      "r2_gap": 0.039493567407397345,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "measured"
+    },
+    {
+      "suite": "CTR23",
+      "dataset": "solar_flare",
+      "n_train": 959,
+      "n_test": 107,
+      "rmse_excess_pct": 9.110834710483996,
+      "r2_gap": 0.1690211287655574,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "measured"
+    },
+    {
+      "suite": "PFN",
+      "dataset": "Mercedes_Benz_Greener_Manufacturing",
+      "n_train": 3788,
+      "n_test": 421,
+      "rmse_excess_pct": 0.6497020178477086,
+      "r2_gap": 0.005083804016161708,
+      "selection_reason": "PFN priority: worse than strongest baseline; small-gap targeted adaptation",
+      "baseline_R2_source": "measured"
+    },
+    {
+      "suite": "PFN",
+      "dataset": "tecator",
+      "n_train": 216,
+      "n_test": 24,
+      "rmse_excess_pct": 11.711105785128684,
+      "r2_gap": 7.223377399678821e-05,
+      "selection_reason": "PFN priority: worse than strongest baseline; small-gap targeted adaptation",
+      "baseline_R2_source": "measured"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "1000-Cameras-Dataset",
+      "n_train": 664,
+      "n_test": 208,
+      "rmse_excess_pct": 4.9736951514489425,
+      "r2_gap": 0.04560196131353589,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "Goodreads-Computer-Books",
+      "n_train": 789,
+      "n_test": 247,
+      "rmse_excess_pct": 15.382667225045953,
+      "r2_gap": 0.20971284200177862,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "Job_Profitability",
+      "n_train": 9267,
+      "n_test": 2896,
+      "rmse_excess_pct": 25.265602414266965,
+      "r2_gap": 0.3058791441746357,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "MIP-2016-regression",
+      "n_train": 697,
+      "n_test": 218,
+      "rmse_excess_pct": 9.69821993040869,
+      "r2_gap": 0.1213112104718207,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "archive2",
+      "n_train": 731,
+      "n_test": 229,
+      "rmse_excess_pct": 4.740470427847354,
+      "r2_gap": 0.040692472862607354,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "boston",
+      "n_train": 323,
+      "n_test": 102,
+      "rmse_excess_pct": 10.216946329556254,
+      "r2_gap": 0.04176045208832202,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "debutanizer",
+      "n_train": 1532,
+      "n_test": 479,
+      "rmse_excess_pct": 53.01127203506053,
+      "r2_gap": 0.03223572530733021,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "garments_worker_productivity",
+      "n_train": 765,
+      "n_test": 240,
+      "rmse_excess_pct": 3.780353965254868,
+      "r2_gap": 0.036752952914854975,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "house_prices_nominal",
+      "n_train": 934,
+      "n_test": 292,
+      "rmse_excess_pct": 52.36357978742778,
+      "r2_gap": 0.08549153163931822,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "qsar_fish_toxicity",
+      "n_train": 580,
+      "n_test": 182,
+      "rmse_excess_pct": 3.078114521416464,
+      "r2_gap": 0.028031048795225777,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "sensory",
+      "n_train": 368,
+      "n_test": 116,
+      "rmse_excess_pct": 4.475527528045653,
+      "r2_gap": 0.05684324926630102,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "socmob",
+      "n_train": 739,
+      "n_test": 232,
+      "rmse_excess_pct": 113.9472662977739,
+      "r2_gap": 0.22692272472149533,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "stock_fardamento02",
+      "n_train": 4016,
+      "n_test": 1256,
+      "rmse_excess_pct": 13.691045023653036,
+      "r2_gap": 0.16899424895225001,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    },
+    {
+      "suite": "TALENT",
+      "dataset": "volume",
+      "n_train": 32635,
+      "n_test": 10199,
+      "rmse_excess_pct": 3.1376581504166,
+      "r2_gap": 0.022171499057376365,
+      "selection_reason": "RMSE >=3% worse and R2 gap >=0.02",
+      "baseline_R2_source": "converted_same_test_split_assumption"
+    }
+  ],
+  "caveat": "Targeted task adaptation selected using observed benchmark scores; not an untouched generalization benchmark. TALENT baseline R2 is converted under a same-test-split assumption, not independently measured. RMSE is primary.",
+  "training_policy": "one shared Loop3 model; 50 optimizer updates; save every update; train-split-only episodes; no test or validation labels"
+}
