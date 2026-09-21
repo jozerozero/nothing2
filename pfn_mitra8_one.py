@@ -207,7 +207,7 @@ def predict_actual8(estimator, query, np):
                   "native_preprocessor": trainer.pfn_native_preprocessor,
                   "native_rng_before_predict_sha256": None,
                   "predict_calls": 0, "test_forward_calls": 0,
-                  "query_chunk_ranges": [], "forward_contexts": [],
+                  "query_chunk_ranges": [], "forward_contexts": [], "observed_model_output_shapes": [],
                   "test_rows_contributed": 0, "native_config": check_cfg8(trainer.cfg)}
         records.append(record)
         original = trainer.predict
@@ -225,13 +225,19 @@ def predict_actual8(estimator, query, np):
             record["predict_calls"] += 1
             require(record["predict_calls"] == 1, "Native member predicted more than once")
             record["native_rng_before_predict_sha256"] = rng_digest(trainer.rng)
-            prediction = np.asarray(original(xs, ys, xt)).reshape(-1)
-            require(prediction.shape == (n_query,) and np.isfinite(prediction).all(),
+            raw_prediction = original(xs, ys, xt)
+            native_prediction = np.asarray(raw_prediction)
+            require(native_prediction.shape in ((n_query,), (n_query, 1))
+                    and np.isfinite(native_prediction).all(),
                     "Invalid native member prediction")
+            prediction = native_prediction.reshape(-1)
             member_outputs[member] = prediction.copy()
+            record["native_prediction_shape"] = list(native_prediction.shape)
             record["prediction_sha256"] = array_digest(prediction)
             record["optimizer_step_attempts"] = trainer.pfn_optimizer_step_attempts
-            return prediction.reshape(-1, 1)
+            # Preserve the native scalar/vector return shape for its averaging
+            # implementation. Flatten only the separate audit copy.
+            return raw_prediction
 
         def forward_check(module, inputs, output, *, member=member, record=record):
             require(len(inputs) == 6, "Unaudited native Mitra forward signature")
@@ -244,7 +250,10 @@ def predict_actual8(estimator, query, np):
                     "Native model changed context/query rows or added hidden test ensembles")
             require(not bool(padding_query.any()) and not bool(padding_support.any()),
                     "Unexpected padded rows in native single-table prediction")
-            require(tuple(output.shape) == (1, chunk_rows, 1), "Native scalar-head output shape changed")
+            output_shape = tuple(output.shape)
+            require(module.dim_output == 1 and output_shape in ((1, chunk_rows), (1, chunk_rows, 1)),
+                    "Native scalar-head output shape changed")
+            record["observed_model_output_shapes"].append(list(output_shape))
             record["test_forward_calls"] += 1
             require(record["test_forward_calls"] <= expected_chunks, "Too many test chunk forwards per native member")
             xsh, ysh, xqh = (array_digest(value.detach().float().cpu().numpy()) for value in (xs, ys, xq))

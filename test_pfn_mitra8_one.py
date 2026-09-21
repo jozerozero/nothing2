@@ -42,6 +42,7 @@ class Model:
     def __init__(self):
         self.hooks = []
         self.dim_output, self.use_flash_attn = 1, False
+        self.output_ndim, self.output_channels = 3, 1
     def register_forward_hook(self, hook):
         self.hooks.append(hook)
         return SimpleNamespace(remove=lambda: self.hooks.remove(hook))
@@ -50,7 +51,8 @@ class Model:
                 Tensor(np.zeros((1, xs.shape[1]), dtype=bool)),
                 Tensor(np.zeros((1, len(xs)), dtype=bool)),
                 Tensor(np.zeros((1, len(query)), dtype=bool)))
-        result = Tensor(np.full((1, len(query), 1), value, dtype=np.float32))
+        shape = (1, len(query)) if self.output_ndim == 2 else (1, len(query), self.output_channels)
+        result = Tensor(np.full(shape, value, dtype=np.float32))
         for hook in self.hooks:
             hook(self, args, result)
 
@@ -65,6 +67,7 @@ class Trainer:
         self.pfn_fit_calls, self.pfn_support_rows, self.pfn_optimizer_step_attempts = 1, support_rows, 0
         self.extra_forward, self.omit_last, self.impute_query = False, False, False
         self.coincident_native_context = False
+        self.prediction_shape = "column"
     def predict(self, xs, ys, query):
         if self.impute_query:
             query[np.isnan(query)] = 0
@@ -80,7 +83,9 @@ class Trainer:
             self.model.run(xs[indices], ys[indices], chunk, self.member)
             if self.extra_forward:
                 self.model.run(xs[indices], ys[indices], chunk, self.member)
-        return np.full((len(actual_query), 1), self.member, dtype=np.float32)
+        shape = ((len(actual_query),) if self.prediction_shape == "vector" else
+                 (len(actual_query), 2 if self.prediction_shape == "multi" else 1))
+        return np.full(shape, self.member, dtype=np.float32)
 
 
 class Estimator:
@@ -94,6 +99,7 @@ class Estimator:
     def predict(self, query):
         trainers = self.trainers[:-1] if self.skip_last else self.trainers
         outputs = [trainer.predict(self.X, self.y, query) for trainer in trainers]
+        self.last_native_member_shapes = [tuple(output.shape) for output in outputs]
         return sum(outputs) / len(outputs) + int(self.bad_average)
 
 
@@ -124,6 +130,35 @@ class StrictEightTests(unittest.TestCase):
         self.assertTrue(audit["actual8_verified"])
         self.assertNotEqual(audit["member_audits"][0]["query_entry_sha256"],
                             audit["member_audits"][1]["query_entry_sha256"])
+
+    def test_scalar_head_2d_and_3d_preserve_vector_and_column_predict_shapes(self):
+        for dimensions in (2, 3):
+            for prediction_shape in ("vector", "column"):
+                estimator = Estimator()
+                for trainer in estimator.trainers:
+                    trainer.model.output_ndim = dimensions
+                    trainer.prediction_shape = prediction_shape
+                with self.subTest(dimensions=dimensions, prediction_shape=prediction_shape):
+                    prediction, audit = worker.predict_actual8(estimator, self.query(), np)
+                    expected_prediction_shape = (7,) if prediction_shape == "vector" else (7, 1)
+                    expected_forward_shape = [1, 7] if dimensions == 2 else [1, 7, 1]
+                    self.assertEqual(estimator.last_native_member_shapes, [expected_prediction_shape] * 8)
+                    for member in audit["member_audits"]:
+                        self.assertEqual(member["native_prediction_shape"], list(expected_prediction_shape))
+                        self.assertEqual(member["observed_model_output_shapes"], [expected_forward_shape])
+                    np.testing.assert_array_equal(prediction, np.full(7, 3.5, dtype=np.float32))
+
+    def test_multioutput_model_head_rejected(self):
+        estimator = Estimator()
+        estimator.trainers[3].model.output_channels = 2
+        with self.assertRaisesRegex(RuntimeError, "scalar-head output shape"):
+            worker.predict_actual8(estimator, self.query(), np)
+
+    def test_multioutput_trainer_prediction_rejected(self):
+        estimator = Estimator()
+        estimator.trainers[3].prediction_shape = "multi"
+        with self.assertRaisesRegex(RuntimeError, "Invalid native member prediction"):
+            worker.predict_actual8(estimator, self.query(), np)
 
     def test_eight_executed_members_allow_naturally_coincident_contexts(self):
         estimator = Estimator()
