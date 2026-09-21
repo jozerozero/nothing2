@@ -1,5 +1,6 @@
 """One guarded, non-published diagnostic of the first frozen native smoke task."""
 import faulthandler
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,22 @@ import sys
 import tempfile
 import tabfm_existing_sidecar_v2 as sidecar
 import tabfm_default_dispatch as frozen
+
+
+@contextmanager
+def diagnostic_watchdog():
+    original = frozen.process_rss
+    def guarded(pid):
+        snapshot = sidecar.rss_snapshot()
+        sidecar.guard_snapshot(snapshot)
+        sidecar.require(snapshot['own_tree_rss_bytes'] <= 16 * 1024**3,
+                        'Bounded smoke diagnostic exceeds16GiB')
+        return original(pid)
+    frozen.process_rss = guarded
+    try:
+        yield
+    finally:
+        frozen.process_rss = original
 
 
 def main():
@@ -20,7 +37,11 @@ def main():
     os.environ.clear()
     os.environ.update(env)
     os.nice(19)
-    sidecar.guard_snapshot(sidecar.rss_snapshot(), startup=True)
+    memory = sidecar.rss_snapshot()
+    sidecar.guard_snapshot(memory)
+    sidecar.require(memory['other_same_uid_rss_bytes'] <= 40 * 1024**3,
+                    'Bounded20GiB smoke needs4GiB parent margin')
+    print('DIAGNOSTIC_MEMORY_20G', json.dumps(memory), flush=True)
     print('CPU_BIND', json.dumps(sidecar.bind_idle_cpu_cores()), flush=True)
     sidecar.check_idle(sidecar.gpu_idle_record())
     import torch
@@ -42,7 +63,7 @@ def main():
     frozen.require(frozen.claim(diagnostic, task, owner, smoke=True), 'Diagnostic already attempted')
     events = []
     print('DIAGNOSTIC_START', json.dumps({'owner': owner, 'TMPDIR': local_tmp}), flush=True)
-    with sidecar.operational_watchdog(events):
+    with diagnostic_watchdog():
         ok = frozen.launch(diagnostic, Path(plan['campaign_path']), task, owner, smoke=True)
     print('DIAGNOSTIC_DONE', json.dumps({'success': ok, 'events': events}), flush=True)
     signal.alarm(0)
