@@ -24,7 +24,7 @@ def safe_array(path):
     except ValueError as e:
         if 'Object arrays cannot be loaded' not in str(e):raise
         x=np.load(path,allow_pickle=True)
-        if not all(v is None or isinstance(v,(str,int,float,np.generic)) for v in x.flat):
+        if not all(v is None or isinstance(v,(str,bytes,int,float,np.generic)) for v in x.flat):
             raise ValueError(f'non-scalar benchmark objects: {path}')
         return x
 
@@ -95,7 +95,8 @@ def main():
                 assert len(arr)==len(y)
                 files.append(path)
                 for j in range(arr.shape[1]):
-                    key=f'{prefix}{j}';frame[key]=arr[:,j]
+                    key=f'{prefix}{j}'
+                    frame[key]=[v.decode('utf-8') if isinstance(v,bytes) else v for v in arr[:,j]]
                     if prefix=='C':cats.append(key)
             frame=pd.DataFrame(frame)
             provenance={'split':'original TALENT train only; val/test unopened'}
