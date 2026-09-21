@@ -136,11 +136,12 @@ def worker(cfg, g, ordinal, manifest_path, root, deadline, stop):
     order=order[start:]+order[:start]
     # Small first, but never drop rows. The full test sequence is always retained.
     rows=sorted(man['rows'],key=lambda r:sum(x['size_bytes'] for x in r['input_files']))
-    done=0; failures=0
+    done=0; failures=0; exit_reason='queue exhausted or all remaining work claimed elsewhere'
     try:
         for ckpt in order:
             for row in rows:
-                if time.time()>deadline or stop.is_set(): return
+                if time.time()>deadline or stop.is_set():
+                    exit_reason='deadline/stop event';return
                 key=f"step-{ckpt['step']}/row-{row['dataset_index']:03d}"
                 result=root/'results'/f'{key}.json'; error=root/'errors'/f'{key}.json'
                 claim=root/'claims'/f'{key}.json'
@@ -172,8 +173,17 @@ def worker(cfg, g, ordinal, manifest_path, root, deadline, stop):
                 try:
                     # Check again between tasks: our previous child has exited,
                     # and an unrelated new workload must not be displaced.
-                    if not check_idle(gpu(g['uuid'])):
-                        reason='GPU became occupied between evaluator subprocesses';return
+                    # gpu_busy_percent is a trailing utilization sample and may
+                    # still show our last completed inference after process exit.
+                    # Empty VRAM is decisive here; startup still requires both.
+                    now_gpu=gpu(g['uuid'])
+                    for _ in range(30):
+                        if now_gpu['vram'] < IDLE_MAX:break
+                        if stop.wait(0.5):break
+                        now_gpu=gpu(g['uuid'])
+                    if now_gpu['vram']>=IDLE_MAX or stop.is_set():
+                        exit_reason='GPU acquired persistent memory use between our completed subprocesses: '+json.dumps(now_gpu)
+                        return
                     with log.open('x') as h:
                         proc=subprocess.Popen(cmd,env=env,stdout=h,stderr=subprocess.STDOUT,
                                               stdin=subprocess.DEVNULL,start_new_session=True)
@@ -207,7 +217,8 @@ def worker(cfg, g, ordinal, manifest_path, root, deadline, stop):
                             'returncode':proc.returncode,'log':str(log),'max_rss_gib':max_rss/GIB,
                             'elapsed_s':time.time()-begin,'error_tail':log.read_text(errors='replace')[-6000:]},True)
                         # Systematic environment/protocol failures must not waste all tasks.
-                        if failures>=3 and done==0:return
+                        if failures>=3 and done==0:
+                            exit_reason='three initial evaluation failures';return
                 except BaseException:
                     if proc is not None:stop_own(proc)
                     raise
@@ -215,7 +226,7 @@ def worker(cfg, g, ordinal, manifest_path, root, deadline, stop):
                     if claim.exists() and read(claim).get('worker')==identity:claim.unlink()
     finally:
         atomic(root/'workers'/f'{identity}.json',{'state':'worker_exited','worker':identity,
-               'completed':done,'failed':failures,'ended_epoch':time.time(),'gpu':g})
+               'completed':done,'failed':failures,'ended_epoch':time.time(),'gpu':g,'exit_reason':exit_reason})
 
 def node_run(a):
     plan=read(a.plan); cfg=next(n for n in plan['nodes'] if n['parent']==a.parent)
@@ -239,8 +250,12 @@ def launch(a):
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         for cfg in plan['nodes']:
             if a.only_parent and cfg['parent']!=a.only_parent:continue
-            receipt=root/'launches'/f"{cfg['parent']}.json"
+            suffix=('.'+a.attempt) if a.attempt else ''
+            assert not a.attempt or re.fullmatch(r'[A-Za-z0-9_-]+',a.attempt)
+            receipt=root/'launches'/f"{cfg['parent']}{suffix}.json"
             if receipt.exists():continue
+            active=subprocess.check_output(['squeue','--steps','-j',cfg['parent'],'-h','-o','%i|%j'],text=True)
+            assert 'regft50eval' not in active, 'existing evaluation child still live; refuse duplicate launch'
             raw=subprocess.check_output(['scontrol','show','job',cfg['parent'],'-o'],text=True)
             fields=dict(re.findall(r'(\w+)=(\S+)',raw))
             assert fields['JobState']=='RUNNING' and fields['NodeList']==cfg['node']
@@ -251,7 +266,7 @@ def launch(a):
                 '--gpus=8','--gpu-bind=none','--time='+cfg['time_limit'],'--unbuffered',
                 '--job-name=regft50eval',sys.executable,str(Path(__file__).resolve()),'node',
                 '--plan',str(Path(a.plan).resolve()),'--manifest',str(Path(a.manifest).resolve()),'--parent',cfg['parent']]
-            log=root/'launches'/f"{cfg['parent']}.log";log.parent.mkdir(parents=True,exist_ok=True)
+            log=root/'launches'/f"{cfg['parent']}{suffix}.log";log.parent.mkdir(parents=True,exist_ok=True)
             with log.open('x') as h:
                 p=subprocess.Popen(cmd,stdin=subprocess.DEVNULL,stdout=h,stderr=subprocess.STDOUT,start_new_session=True)
             rec={'parent':cfg['parent'],'node':cfg['node'],'launcher_pid':p.pid,'command':cmd,
@@ -267,6 +282,7 @@ def main():
     for mode in ('node','launch'):
         s=sub.add_parser(mode);s.add_argument('--manifest',required=True);s.add_argument('--plan',required=True)
         if mode=='node':s.add_argument('--parent',required=True)
-        else:s.add_argument('--only-parent')
+        else:
+            s.add_argument('--only-parent');s.add_argument('--attempt')
     a=p.parse_args();{'plan':build_plan,'node':node_run,'launch':launch}[a.mode](a)
 if __name__=='__main__':main()
