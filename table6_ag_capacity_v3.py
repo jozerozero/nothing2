@@ -44,6 +44,7 @@ def node(parent):
         limit = int((memory/'memory.max').read_text())
         cpu_root = memory
         cpus = expand((cpu_root/'cpuset.cpus.effective').read_text())
+        source = 'cgroup_v2'
     except RuntimeError:
         memory = parent_path(parent, 'memory', mounts)
         current = int((memory/'memory.usage_in_bytes').read_text())
@@ -52,12 +53,14 @@ def node(parent):
         cpu_file = cpu_root/'cpuset.effective_cpus'
         if not cpu_file.exists(): cpu_file = cpu_root/'cpuset.cpus'
         cpus = expand(cpu_file.read_text())
+        source = 'cgroup_v1'
     common.require(cpus and limit > current >= 0, 'invalid parent cgroup counters')
     import psutil
     samples = [psutil.cpu_percent(interval=1, percpu=True) for _ in range(2)]
     idle = [c for c in cpus if all(c < len(s) and s[c] < 25 for s in samples)]
     return {'parent_job_id': parent, 'node': PARENTS[parent], 'observed_epoch': time.time(),
             'parent_memory_current_bytes': current, 'parent_memory_limit_bytes': limit,
+            'parent_memory_source': source,
             'available_memory_bytes': psutil.virtual_memory().available,
             'idle_cpu_ids': idle, 'parent_cpu_ids': cpus,
             'memory_cgroup': str(memory), 'cpuset_cgroup': str(cpu_root),
