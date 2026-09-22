@@ -12,6 +12,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import socket
@@ -193,7 +194,14 @@ def collect_processes(fd_devices, proc_root=Path('/proc')):
                     if descriptors:
                         other_gpu_owners.append({'pid': pid, 'uid': process_uid, 'gpu_fds': descriptors})
                 except PermissionError:
-                    unknown_other.append({'pid': pid, 'uid': process_uid, 'reason': 'foreign_fd_permission_denied'})
+                    unknown = {'pid': pid, 'uid': process_uid, 'reason': 'foreign_fd_permission_denied'}
+                    if process_uid != 0:
+                        # Public process identity only: no foreign environment,
+                        # command arguments, file contents or descriptors.
+                        unknown.update(username=pwd.getpwuid(process_uid).pw_name,
+                                       comm=(path/'comm').read_text().strip(),
+                                       cgroup=(path/'cgroup').read_text().splitlines())
+                    unknown_other.append(unknown)
                 continue
             record = {'pid': pid, 'uid': process_uid, **initial,
                       'cmdline': [v.decode('utf-8', errors='replace') for v in (path / 'cmdline').read_bytes().split(b'\0') if v],
