@@ -79,8 +79,23 @@ def collect(parent):
 
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--node', choices=PARENTS); p.add_argument('--output',type=Path)
+    p.add_argument('--launch-samples', nargs=2, type=Path)
     a = p.parse_args()
-    if a.node:
+    if a.launch_samples:
+        import table6_ag_existing_v3 as worker
+        rows = [{v['parent_job_id']:v for v in json.loads(path.read_text())['observations']} for path in a.launch_samples]
+        for parent,node_name in PARENTS.items():
+            proof = {'allow_cpu_sidecar':True,'parent_job_id':parent,'node':node_name,
+                     'observations':[row[parent] for row in rows]}
+            worker.validate_capacity(proof,parent,node_name,4)
+        for parent,node_name in PARENTS.items():
+            proof = {'allow_cpu_sidecar':True,'parent_job_id':parent,'node':node_name,
+                     'observations':[row[parent] for row in rows]}
+            path = worker.STAGE/('capacity-'+parent+'-22d.json')
+            common.publish(path,proof)
+            receipt=worker.launch(parent,node_name,4,path,'ag-'+parent+'-22d')
+            print(json.dumps(receipt),flush=True)
+    elif a.node:
         print('AG_CAPACITY='+json.dumps(node(a.node)))
     else:
         common.require(a.output is not None and not a.output.exists(), 'new sample output required')
