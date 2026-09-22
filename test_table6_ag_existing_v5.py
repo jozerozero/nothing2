@@ -127,6 +127,36 @@ class V5Tests(unittest.TestCase):
             proof = v.previous_attempt(directory, '206117', self.node, run=legacy, now=self.now)
             self.assertTrue(proof['terminated_historical_running_claims'][0]['terminal']['queue_empty'])
 
+    def test_exact_native_gone_spelling_only_after_terminal_proof(self):
+        stage, directory, out = self.previous()
+        v.publish(out / 'claims' / 'legacy.json', self.claim(job_id='181785', step_id=None, state='running'))
+        scheduler = self.scheduler()
+        def legacy(state='COMPLETED', error='slurm_load_jobs error: Invalid job id specified\n', stdout=''):
+            calls = []
+            def run(command, **kwargs):
+                if command[command.index('-j')+1] != '181785':
+                    return scheduler(command, **kwargs)
+                calls.append(command[0])
+                if command[0] == 'sacct':
+                    return types.SimpleNamespace(returncode=0, stdout=f'181785|{state}|2026-09-22T13:00:00\n', stderr='')
+                return types.SimpleNamespace(returncode=1, stdout=stdout, stderr=error)
+            return run, calls
+        with patch.object(v, 'PREVIOUS_STAGE', stage), patch.object(v.ag, 'OUT', out):
+            run, calls = legacy()
+            proof = v.previous_attempt(directory, '206117', self.node, run=run, now=self.now)
+            self.assertTrue(proof['terminated_historical_running_claims'][0]['terminal']['queue_empty'])
+            self.assertEqual(calls, ['sacct', 'squeue', 'squeue'])
+            run, calls = legacy(state='RUNNING')
+            with self.assertRaisesRegex(RuntimeError, 'owner nonterminal'):
+                v.previous_attempt(directory, '206117', self.node, run=run, now=self.now)
+            self.assertEqual(calls, ['sacct'])
+            for error, stdout in [('slurm_load_jobs error: Socket timed out\n', ''),
+                                  ('slurm_load_jobs error: Invalid job id specified; permission denied\n', ''),
+                                  ('slurm_load_jobs error: Invalid job id specified\n', '181785|RUNNING\n')]:
+                run, _ = legacy(error=error, stdout=stdout)
+                with self.assertRaisesRegex(RuntimeError, 'owner query failed'):
+                    v.previous_attempt(directory, '206117', self.node, run=run, now=self.now)
+
     def test_missing_rank_finish_and_fatal_audit_block(self):
         stage, directory, out = self.previous()
         audit = out / 'auxiliary' / stage.name / 'j206117-s207'

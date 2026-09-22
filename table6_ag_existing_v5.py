@@ -149,7 +149,16 @@ def previous_attempt(directory, parent, node, *, run=subprocess.run, now=None):
                 def supported_query(command, **kwargs):
                     if command[:2] == ['squeue', '--steps']:
                         command = ['%i' if item == '%i|%T' else item for item in command]
-                    return run(command, **kwargs)
+                    response = run(command, **kwargs)
+                    # This site's Slurm emits this alternate exact spelling
+                    # for an expired job. Only normalize the spelling; the
+                    # frozen caller still requires prior terminal accounting
+                    # and 120-second grace before allowing a missing job.
+                    if command[0] == 'squeue' and response.returncode != 0 and not response.stdout.strip() and \
+                            response.stderr.strip() == 'slurm_load_jobs error: Invalid job id specified':
+                        return types.SimpleNamespace(returncode=response.returncode, stdout=response.stdout,
+                                                     stderr='squeue: error: Invalid job id specified')
+                    return response
                 checked[identity] = v3.ag_original_terminal(claim, run=supported_query, now=now)
             terminated_running.append({'path': str(path), 'terminal': checked[identity]})
     return {'directory': str(directory), 'terminal': proof, 'source_records': records,
