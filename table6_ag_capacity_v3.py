@@ -80,8 +80,20 @@ def collect(parent):
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--node', choices=PARENTS); p.add_argument('--output',type=Path)
     p.add_argument('--launch-samples', nargs=2, type=Path)
+    p.add_argument('--launch-v4-samples', nargs=2, type=Path)
     a = p.parse_args()
-    if a.launch_samples:
+    if a.launch_v4_samples:
+        import table6_ag_existing_v4 as worker
+        rows = [{v['parent_job_id']:v for v in json.loads(path.read_text())['observations']} for path in a.launch_v4_samples]
+        for parent,node_name in PARENTS.items():
+            proof={'allow_cpu_sidecar':True,'parent_job_id':parent,'node':node_name,'observations':[row[parent] for row in rows]}
+            worker.v3.validate_capacity(proof,parent,node_name,2)
+        for parent,node_name in PARENTS.items():
+            proof={'allow_cpu_sidecar':True,'parent_job_id':parent,'node':node_name,'observations':[row[parent] for row in rows]}
+            path=worker.STAGE/('capacity-'+parent+'-22d.json')
+            common.publish(path,proof)
+            print(json.dumps(worker.launch(parent,node_name,path,'ag-'+parent+'-22d',worker.V3_STAGE/'launches'/('ag-'+parent+'-22d'))),flush=True)
+    elif a.launch_samples:
         import table6_ag_existing_v3 as worker
         rows = [{v['parent_job_id']:v for v in json.loads(path.read_text())['observations']} for path in a.launch_samples]
         for parent,node_name in PARENTS.items():
