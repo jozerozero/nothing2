@@ -98,6 +98,15 @@ class PlanTests(unittest.TestCase):
         b['parents'][0]['epoch'] += 20
         return a, b
 
+    def test_known_os_and_login_services_are_not_model_workers(self):
+        item={'pid':777,'uid':1001,'username':'ubuntu','comm':'bash',
+              'reason':'foreign_fd_permission_denied',
+              'cgroup':['0::/user.slice/user-1001.slice/session-1598.scope']}
+        self.assertTrue(p.reviewed_foreign_service(item))
+        self.assertFalse(p.reviewed_foreign_service(dict(item,comm='python')))
+        self.assertFalse(p.reviewed_foreign_service(dict(item,uid=2013)))
+        self.assertFalse(p.reviewed_foreign_service(dict(item,cgroup=['0::/job_555/step_0'])))
+
     def proof(self, a, b, kind='gap190', now=1000):
         with mock.patch.object(p, 'read_pinned', side_effect=[({'path': '/a'}, a), ({'path': '/b'}, b)]), \
              mock.patch.object(p, 'identity', return_value={'sha256': 'probe'}):

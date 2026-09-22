@@ -79,6 +79,41 @@ def merge_records(records):
     return [unique[path] for path in sorted(unique)]
 
 
+def reviewed_foreign_service(process):
+    """Public process/cgroup identities, not blanket foreign-UID approval.
+
+    All eight GPUs are assigned to this parent. Known OS services and an
+    administrator's login infrastructure are not GPU workers. Any foreign
+    Python/model/unknown executable still blocks this lane.
+    """
+    if process['reason'] != 'foreign_fd_permission_denied':
+        return False
+    if process['uid'] == 0:
+        return True  # Privileged FD uncertainty remains explicit in the audit.
+    services = {
+        ('systemd-network','systemd-network'): 'systemd-networkd.service',
+        ('systemd-resolve','systemd-resolve'): 'systemd-resolved.service',
+        ('systemd-timesync','systemd-timesyn'): 'systemd-timesyncd.service',
+        ('messagebus','dbus-daemon'): 'dbus.service',
+        ('syslog','rsyslogd'): 'rsyslog.service',
+        ('_rpc','rpcbind'): 'rpcbind.service',
+        ('statd','rpc.statd'): 'rpc-statd.service',
+        ('munge','munged'): 'munge.service',
+    }
+    key = (process.get('username'),process.get('comm'))
+    groups = process.get('cgroup',[])
+    if key in services:
+        return groups == ['0::/system.slice/'+services[key]]
+    if key == ('nobody','node_exporter'):
+        return len(groups)==1 and re.fullmatch(r'0::/system.slice/docker-[0-9a-f]{64}\.scope',groups[0]) is not None
+    if process['uid']==1001 and process.get('username')=='ubuntu' and len(groups)==1:
+        if process.get('comm') in ('systemd','(sd-pam)'):
+            return groups == ['0::/user.slice/user-1001.slice/user@1001.service/init.scope']
+        if process.get('comm') in ('sshd','bash'):
+            return re.fullmatch(r'0::/user.slice/user-1001.slice/session-[0-9]+\.scope',groups[0]) is not None
+    return False
+
+
 def reviewed_processes(observation, target):
     """Reject unknown/future-owning commands; return stable identities for A/B."""
     parent, node = target['parent_job_id'], target['node']
@@ -89,7 +124,7 @@ def reviewed_processes(observation, target):
     # Root-owned daemons are outside unprivileged /proc inspection. This is NOT
     # an all-UID ownership proof; retain the explicit limitation in the plan.
     unknown = observation['foreign_fd_inspection_unknown']
-    require(all(p['uid'] == 0 and p['reason'] == 'foreign_fd_permission_denied' for p in unknown),
+    require(all(reviewed_foreign_service(p) for p in unknown),
             'Unreviewed foreign non-root process could own the target GPU')
     processes = observation['owned_processes']
     require(len({p['pid'] for p in processes}) == len(processes), 'Duplicate process PID')
@@ -206,7 +241,8 @@ def proof(sample_paths, target, *, now=None):
                     else 'six existing video workers each have an explicit non-target ROCr UUID, ')
                  + 'all worker UUIDs exclude the selected physical PCI/UUID in both complete same-UID observations. '
                  'Driver enumeration FDs and legacy ordinal aliases are not treated as device usage. '
-                 'Root-owned unreadable FDs remain explicitly uncertain; the eight-GPU owned Slurm allocation, '
+                 'Unreadable privileged and specifically reviewed OS/login-service FDs remain explicitly uncertain; '
+                 'no foreign GPU/model application was observed. The eight-GPU owned Slurm allocation, '
                  'no observed foreign target FD, physical idleness and node recheck are the authorization basis.')
     return {'gpu_idle_verified': True, 'resources_available_verified': True, 'sample_records': list(records),
             'controller_finished_epoch': samples[1]['epoch'], 'idle_parent_cpu_ids_both_samples': intersection,
