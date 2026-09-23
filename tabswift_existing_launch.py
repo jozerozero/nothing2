@@ -180,6 +180,8 @@ def owners(plan):
         try:
             if proc.pid == os.getpid() or proc.info['uids'].real != os.getuid():
                 continue
+            if proc.status() in (psutil.STATUS_ZOMBIE,psutil.STATUS_DEAD):
+                continue  # Exited worker can remain in its manager's process table until reaped.
             env = proc.environ()
             if ('GPU-'+plan['gpu']['uuid']) in env.get('ROCR_VISIBLE_DEVICES','').split(','):
                 matches.append({'pid':proc.pid, 'cmd':proc.info['cmdline']})
