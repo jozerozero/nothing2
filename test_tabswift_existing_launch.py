@@ -1,5 +1,8 @@
 import tempfile
 import unittest
+import os
+import sys
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch, Mock
 
@@ -7,6 +10,15 @@ import tabswift_existing_launch as launch
 
 
 class LauncherTests(unittest.TestCase):
+    def test_zombie_is_not_a_live_gpu_owner(self):
+        proc=Mock(pid=999999,info={'uids':SimpleNamespace(real=os.getuid()),'cmdline':['exited']})
+        proc.status.return_value='zombie'
+        proc.environ.side_effect=AssertionError('Must not read zombie environment')
+        fake=SimpleNamespace(process_iter=lambda _: [proc],STATUS_ZOMBIE='zombie',STATUS_DEAD='dead',
+                             NoSuchProcess=ProcessLookupError)
+        with patch.dict(sys.modules,{'psutil':fake}):
+            self.assertEqual(launch.owners({'gpu':{'uuid':'x'}}),[])
+
     def test_no_implicit_video_release(self):
         self.assertEqual(launch.release_idle_video({}, {}, Path('/unused')),0)
 
