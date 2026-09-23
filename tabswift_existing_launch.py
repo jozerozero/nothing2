@@ -20,6 +20,26 @@ import tabswift_existing_fp32 as worker
 VIDEO_ROOT = Path('/vast/users/guangyi.chen/causal_group/jinyuan.hu/eec-bench/EECBench/experiments/holocine_generation_200_20260922')
 
 
+def pidfd_open(pid):
+    if hasattr(os,'pidfd_open'):return os.pidfd_open(pid)
+    import ctypes,platform
+    require(platform.system()=='Linux' and platform.machine()=='x86_64','Unsupported pidfd compatibility target')
+    libc=ctypes.CDLL(None,use_errno=True)
+    fd=libc.syscall(434,int(pid),0)  # Linux x86_64 __NR_pidfd_open
+    if fd<0:raise OSError(ctypes.get_errno(),os.strerror(ctypes.get_errno()))
+    os.set_inheritable(fd,False)
+    return fd
+
+
+def pidfd_signal(descriptor,signum):
+    if hasattr(signal,'pidfd_send_signal'):return signal.pidfd_send_signal(descriptor,signum)
+    import ctypes,platform
+    require(platform.system()=='Linux' and platform.machine()=='x86_64','Unsupported pidfd compatibility target')
+    libc=ctypes.CDLL(None,use_errno=True)
+    result=libc.syscall(424,int(descriptor),int(signum),ctypes.c_void_p(),0)  # __NR_pidfd_send_signal
+    if result<0:raise OSError(ctypes.get_errno(),os.strerror(ctypes.get_errno()))
+
+
 def clean_environment():
     blocked = ('SLURM_', 'SBATCH_', 'SRUN_', 'PMI_', 'PMIX_', 'OMPI_')
     remove = {'PYTHONPATH', 'PYTHONHOME', 'CUDA_VISIBLE_DEVICES', 'HIP_VISIBLE_DEVICES',
@@ -84,14 +104,15 @@ def release_idle_video(plan, intent, stage):
     env=proc.environ()
     require(env.get('SLURM_JOB_ID')==plan['parent_job_id'] and env.get('SLURM_STEP_ID')=='7'
             and env.get('ROCR_VISIBLE_DEVICES')=='GPU-'+plan['gpu']['uuid'], 'Video GPU owner changed')
-    descriptor=os.pidfd_open(pid)
+    descriptor=pidfd_open(pid)
     paused=False
-    parentfd=os.pidfd_open(os.getpid())
+    parentfd=pidfd_open(os.getpid())
+    pidfd_signal(descriptor,0)  # Check syscall support before any pause.
     watchdog=os.fork()
     if watchdog==0:
         import select
         def restore_exit(*_):
-            try:signal.pidfd_send_signal(descriptor,signal.SIGCONT)
+            try:pidfd_signal(descriptor,signal.SIGCONT)
             except ProcessLookupError:pass
             os._exit(0)
         for signum in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):signal.signal(signum,restore_exit)
@@ -107,7 +128,7 @@ def release_idle_video(plan, intent, stage):
     try:
         require(worker.process_identity(pid)['start_ticks']==target['start_ticks'], 'PID recycled before release')
         hardware(plan)
-        paused=True; signal.pidfd_send_signal(descriptor,signal.SIGSTOP)
+        paused=True; pidfd_signal(descriptor,signal.SIGSTOP)
         for _ in range(50):
             if worker.process_identity(pid)['state'] in ('T','t'):break
             subprocess.run(['/bin/true'],check=True,timeout=1)
@@ -126,8 +147,8 @@ def release_idle_video(plan, intent, stage):
             'active_video_claims':0,'gpu':plan['gpu'],'epoch':time.time(),'scope':'one authorized idle worker'})
         require(time.monotonic()<release_deadline and worker.process_identity(pid)['state'] in ('T','t'),
                 'Release freeze expired; worker must be rechecked')
-        signal.pidfd_send_signal(descriptor,signal.SIGTERM)
-        signal.pidfd_send_signal(descriptor,signal.SIGCONT); paused=False
+        pidfd_signal(descriptor,signal.SIGTERM)
+        pidfd_signal(descriptor,signal.SIGCONT); paused=False
         import select
         require(bool(select.select([descriptor],[],[],10)[0]),'Idle video worker did not exit after SIGTERM')
         publish_new(stage/'video-release-complete.json',{'target':target,'epoch':time.time(),
@@ -135,7 +156,7 @@ def release_idle_video(plan, intent, stage):
         return 1
     finally:
         if paused:
-            try:signal.pidfd_send_signal(descriptor,signal.SIGCONT)
+            try:pidfd_signal(descriptor,signal.SIGCONT)
             except ProcessLookupError:pass
         try:os.kill(watchdog,signal.SIGTERM)
         except ProcessLookupError:pass
