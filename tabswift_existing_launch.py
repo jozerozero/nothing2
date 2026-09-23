@@ -77,7 +77,7 @@ def launch(path, release_idle_video=False):
     if release_idle_video:
         require(plan['node']=='auh7-1b-gpu-302' and plan['gpu']['uuid']=='18275849e7dba51c',
                 'Only the specifically authorized one idle video GPU may be released')
-        intent['release_idle_video']={'pid':3905554,'start_ticks':1023410773,'worker':'node302_gpu7'}
+        intent['release_idle_video']={'pid':3919969,'start_ticks':1024299466,'worker':'node302_gpu7'}
     publish_new(stage/'launch-intent.json', intent)
     with (stage/'launch.log').open('x') as log:
         child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
@@ -93,7 +93,7 @@ def release_idle_video(plan, intent, stage):
     if not target:
         return 0
     require(plan['node']=='auh7-1b-gpu-302' and plan['gpu']['uuid']=='18275849e7dba51c'
-            and target=={'pid':3905554,'start_ticks':1023410773,'worker':'node302_gpu7'},
+            and target=={'pid':3919969,'start_ticks':1024299466,'worker':'node302_gpu7'},
             'Unapproved video release target')
     import psutil
     pid=target['pid']; proc=psutil.Process(pid); initial=worker.process_identity(pid)
