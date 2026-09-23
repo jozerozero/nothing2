@@ -41,7 +41,7 @@ def check_parent(plan):
     return raw, f
 
 
-def launch(path):
+def launch(path, release_idle_video=False):
     plan, _ = worker.load_plan(path)
     raw, _ = check_parent(plan)
     stage = Path(plan['runtime_root'])
@@ -54,6 +54,10 @@ def launch(path):
     intent = {'plan_id':plan['plan_id'], 'epoch':time.time(), 'command':command,
               'controller_source':worker.identity(__file__), 'parent_control':raw,
               'actual_model_gpus':1, 'new_allocation':False, 'video_signals_sent':0}
+    if release_idle_video:
+        require(plan['node']=='auh7-1b-gpu-302' and plan['gpu']['uuid']=='18275849e7dba51c',
+                'Only the specifically authorized one idle video GPU may be released')
+        intent['release_idle_video']={'pid':3905554,'start_ticks':1023410773,'worker':'node302_gpu7'}
     publish_new(stage/'launch-intent.json', intent)
     with (stage/'launch.log').open('x') as log:
         child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
@@ -61,6 +65,83 @@ def launch(path):
     receipt = dict(intent, state='dispatched_not_yet_preflighted', controller_pid=child.pid)
     publish_new(stage/'launch-receipt.json', receipt)
     return receipt
+
+
+def release_idle_video(plan, intent, stage):
+    """Release only the authorized idle worker; never a manager or claimed episode."""
+    target = intent.get('release_idle_video')
+    if not target:
+        return 0
+    require(plan['node']=='auh7-1b-gpu-302' and plan['gpu']['uuid']=='18275849e7dba51c'
+            and target=={'pid':3905554,'start_ticks':1023410773,'worker':'node302_gpu7'},
+            'Unapproved video release target')
+    import psutil
+    pid=target['pid']; proc=psutil.Process(pid); initial=worker.process_identity(pid)
+    expected_cmd=['/vast/users/guangyi.chen/anaconda3/envs/vace/bin/python','-u',
+                  str(VIDEO_ROOT/'campaign.py'),'worker','--worker',target['worker'],'--mode','mapped']
+    require(initial['start_ticks']==target['start_ticks'] and initial['uid']==os.getuid()
+            and proc.cmdline()==expected_cmd and not proc.children(recursive=True), 'Video process identity changed')
+    env=proc.environ()
+    require(env.get('SLURM_JOB_ID')==plan['parent_job_id'] and env.get('SLURM_STEP_ID')=='7'
+            and env.get('ROCR_VISIBLE_DEVICES')=='GPU-'+plan['gpu']['uuid'], 'Video GPU owner changed')
+    descriptor=os.pidfd_open(pid)
+    paused=False
+    parentfd=os.pidfd_open(os.getpid())
+    watchdog=os.fork()
+    if watchdog==0:
+        import select
+        def restore_exit(*_):
+            try:signal.pidfd_send_signal(descriptor,signal.SIGCONT)
+            except ProcessLookupError:pass
+            os._exit(0)
+        for signum in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):signal.signal(signum,restore_exit)
+        ready=select.select([parentfd,descriptor],[],[],20)[0]
+        if descriptor not in ready:restore_exit()
+        os._exit(0)
+    os.close(parentfd)
+    release_deadline=time.monotonic()+10
+    old_handlers={}
+    def abort_release(signum, frame):raise RuntimeError('Release interrupted by signal '+str(signum))
+    for signum in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):
+        old_handlers[signum]=signal.signal(signum,abort_release)
+    try:
+        require(worker.process_identity(pid)['start_ticks']==target['start_ticks'], 'PID recycled before release')
+        hardware(plan)
+        paused=True; signal.pidfd_send_signal(descriptor,signal.SIGSTOP)
+        for _ in range(50):
+            if worker.process_identity(pid)['state'] in ('T','t'):break
+            subprocess.run(['/bin/true'],check=True,timeout=1)
+        actual=worker.process_identity(pid)
+        require(actual['state'] in ('T','t') and not actual['children'], 'Worker did not stop cleanly')
+        state=json.loads((VIDEO_ROOT/'workers'/(target['worker']+'.json')).read_text())
+        require(state['pid']==pid and state['job']==plan['parent_job_id'] and state['node']==plan['node']
+                and state['uuid']=='GPU-'+plan['gpu']['uuid']
+                and state['state']=='waiting_for_phase_barrier'
+                and 0<=time.time()-state['heartbeat']<45, 'Worker no longer safely idle at phase barrier')
+        queue=json.loads((VIDEO_ROOT/'queue.json').read_text())
+        require(not any(t.get('worker')==target['worker'] and t['status']=='running' for t in queue['tasks']),
+                'Worker owns an unfinished video episode')
+        hardware(plan)
+        publish_new(stage/'video-release-intent.json',{'target':target,'identity':actual,'state':state,
+            'active_video_claims':0,'gpu':plan['gpu'],'epoch':time.time(),'scope':'one authorized idle worker'})
+        require(time.monotonic()<release_deadline and worker.process_identity(pid)['state'] in ('T','t'),
+                'Release freeze expired; worker must be rechecked')
+        signal.pidfd_send_signal(descriptor,signal.SIGTERM)
+        signal.pidfd_send_signal(descriptor,signal.SIGCONT); paused=False
+        import select
+        require(bool(select.select([descriptor],[],[],10)[0]),'Idle video worker did not exit after SIGTERM')
+        publish_new(stage/'video-release-complete.json',{'target':target,'epoch':time.time(),
+            'process_exited':True,'video_results_modified':False,'parent_or_manager_modified':False})
+        return 1
+    finally:
+        if paused:
+            try:signal.pidfd_send_signal(descriptor,signal.SIGCONT)
+            except ProcessLookupError:pass
+        try:os.kill(watchdog,signal.SIGTERM)
+        except ProcessLookupError:pass
+        os.waitpid(watchdog,0)
+        for signum,old in old_handlers.items():signal.signal(signum,old)
+        os.close(descriptor)
 
 
 def hardware(plan):
@@ -100,6 +181,7 @@ def node(path):
             and os.environ.get('SLURM_NTASKS') == '1' and os.environ.get('SLURM_PROCID') == '0'
             and os.environ.get('SLURM_STEP_ID', '').isdigit(), 'Wrong real single-rank child')
     raw, f = check_parent(plan)
+    interrupted=release_idle_video(plan,intent,stage)
     lease = VIDEO_ROOT/'gpu_leases'/(plan['node']+'_GPU-'+plan['gpu']['uuid']+'.lock')
     require(lease.parent.is_dir() and not lease.is_symlink(), 'Missing/unsafe cooperative GPU lease')
     fd = os.open(lease, os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW, 0o600)
@@ -140,7 +222,7 @@ def node(path):
             'release_method':'cooperative_gpu_lease', 'paused_video_owners':[], 'no_other_gpu_owners':True,
             'cooperative_lease':{'path':str(lease),'holder_pid':os.getpid(),'start_ticks':own['start_ticks'],
                 'uid':os.getuid(),'fd':fd,'device':st.st_dev,'inode':st.st_ino},
-            'hardware_samples':[first,second], 'video_processes_interrupted':0}
+            'hardware_samples':[first,second], 'video_processes_interrupted':interrupted}
         publish_new(Path(plan['gate_path']), gate)
         os.nice(19)
         subprocess.run(['ionice','-c3','-p',str(os.getpid())], capture_output=True, check=True)
@@ -157,7 +239,7 @@ def node(path):
             forward(signal.SIGTERM, None)
             code = child.wait(timeout=20)
         publish_new(stage/'controller-terminal.json', {'exit_code':code, 'epoch':time.time(),
-            'step':os.environ['SLURM_STEP_ID'], 'gpu':plan['gpu'], 'video_processes_interrupted':0})
+            'step':os.environ['SLURM_STEP_ID'], 'gpu':plan['gpu'], 'video_processes_interrupted':interrupted})
         return {'exit_code':code, 'step':os.environ['SLURM_STEP_ID']}
     finally:
         mine = psutil.Process(os.getpid())
@@ -181,7 +263,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('launch','node'))
     parser.add_argument('--plan',type=Path,required=True)
+    parser.add_argument('--release-idle-video',action='store_true')
     args=parser.parse_args()
-    result=launch(args.plan) if args.mode=='launch' else node(args.plan)
+    require(args.mode=='launch' or not args.release_idle_video,'Release flag belongs only to the recorded launch intent')
+    result=launch(args.plan,args.release_idle_video) if args.mode=='launch' else node(args.plan)
     print(json.dumps(result),flush=True)
     if result.get('exit_code'): raise SystemExit(result['exit_code'])

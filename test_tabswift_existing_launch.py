@@ -7,6 +7,14 @@ import tabswift_existing_launch as launch
 
 
 class LauncherTests(unittest.TestCase):
+    def test_no_implicit_video_release(self):
+        self.assertEqual(launch.release_idle_video({}, {}, Path('/unused')),0)
+
+    def test_reject_wrong_video_target(self):
+        with self.assertRaises(RuntimeError):
+            launch.release_idle_video({'node':'auh7-1b-gpu-241','gpu':{'uuid':'88c2b6b231e4a217'}},
+                {'release_idle_video':{'pid':3905554}},Path('/unused'))
+
     def test_typed_allocation_and_single_model_gpu(self):
         with tempfile.TemporaryDirectory() as tmp:
             plan = dict(parent_job_id='214135', node='auh7-1b-gpu-241',
