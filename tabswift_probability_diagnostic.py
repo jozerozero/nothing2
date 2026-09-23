@@ -24,10 +24,11 @@ import traceback
 ROOT = Path('/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1')
 STAGE = Path(__file__).resolve().parent
 REPO = ROOT/'stage/reg_loop3_step22175_finetune50_20260921_v1/repo'
-DEFAULT_OUT = ROOT/'evaluation/tabfm_tabswift_comparison_20260923_v1/probability_diagnostic_v2'
+DEFAULT_OUT = ROOT/'evaluation/tabfm_tabswift_comparison_20260923_v1/probability_diagnostic_v3'
 PYTHON = ROOT/'stage/tabswift_standard681_20260922_v1/venv/bin/python'
 NAME = 'tsw23probdiag'
-EXCLUDE = 'auh7-1b-gpu-[193,195,207,216,228,239,274,287,292,296]'
+# Node218: job214388 received EACCES opening /dev/kfd and all eight render devices.
+EXCLUDE = 'auh7-1b-gpu-[193,195,207,216,218,228,239,274,287,292,296]'
 CAMPAIGNS = [ROOT/'evaluation'/('tabswift_'+v+'_standard681_20260922_v1')/'manifest.json'
              for v in ('official16', 'budget32x8')]
 MANIFEST_IDS = ['2636231e398e59cd98ed23f94780f4fc4012be52b9106680b8d39a59398482cf',
