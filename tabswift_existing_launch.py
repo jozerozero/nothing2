@@ -47,7 +47,7 @@ def launch(path):
     stage = Path(plan['runtime_root'])
     command = ['srun', '--jobid='+plan['parent_job_id'], '--nodelist='+plan['node'],
                '--overlap', '--exact', '--nodes=1', '--ntasks=1', '--cpus-per-task=4',
-               '--mem=64G', '--gpus=8', '--gpu-bind=none', '--cpu-bind=cores',
+               '--mem=64G', '--gres=gpu:mi210:8', '--gpu-bind=none', '--cpu-bind=cores',
                '--time=02:00:00', '--immediate=10', '--input=none', '--export=ALL',
                '--job-name=swfp32one', '--unbuffered', plan['worker_python'], '-B',
                str(Path(__file__).resolve()), 'node', '--plan', str(Path(path).resolve())]
