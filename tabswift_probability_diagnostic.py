@@ -24,7 +24,7 @@ import traceback
 ROOT = Path('/vast/users/guangyi.chen/causal_group/zijian.li/codex/all178_crossfit_20260722_v1')
 STAGE = Path(__file__).resolve().parent
 REPO = ROOT/'stage/reg_loop3_step22175_finetune50_20260921_v1/repo'
-DEFAULT_OUT = ROOT/'evaluation/tabfm_tabswift_comparison_20260923_v1/probability_diagnostic_v1'
+DEFAULT_OUT = ROOT/'evaluation/tabfm_tabswift_comparison_20260923_v1/probability_diagnostic_v2'
 PYTHON = ROOT/'stage/tabswift_standard681_20260922_v1/venv/bin/python'
 NAME = 'tsw23probdiag'
 EXCLUDE = 'auh7-1b-gpu-[193,195,207,216,228,239,274,287,292,296]'
@@ -246,8 +246,7 @@ def launch(path):
     receipt = {'job_id':os.environ['SLURM_JOB_ID'],'plan_id':plan['plan_id'],'state':'failed'}
     try:
         subprocess.run(common+['--ntasks=1','--ntasks-per-node=1','--cpus-per-task=64','--kill-on-bad-exit=1',
-            str(PYTHON),'-B',str(REPO/'allocated_gpu_uuid.py'),'bootstrap','--mapping',str(mapping),
-            '--expected-cpus','64','--expected-mem-gib','256','--expected-seconds','600'],env=env,check=True)
+            str(PYTHON),'-B',str(Path(__file__).resolve()),'bootstrap-observe','--plan',str(path)],env=env,check=True)
         subprocess.run(common+['--ntasks=8','--ntasks-per-node=8','--cpus-per-task=4','--kill-on-bad-exit=0',
             str(PYTHON),'-B',str(REPO/'allocated_gpu_uuid.py'),'exec','--mapping',str(mapping),'--',
             str(PYTHON),'-B',str(Path(__file__).resolve()),'rank','--plan',str(path)],env=env,check=True)
@@ -264,6 +263,103 @@ def launch(path):
     finally:
         receipt['finished_epoch'] = time.time(); publish(out/'job-finished.json',receipt)
     return receipt
+
+
+def bootstrap_observe(path):
+    """Observe the native bootstrap; preserve every native check and exception."""
+    plan = verify(path); out = Path(plan['output_root'])
+    binding, _worker, _runtime = native()
+    keys = (*binding.MASKS, 'LD_LIBRARY_PATH', 'LD_PRELOAD', 'ROCM_PATH', 'HIP_PATH',
+            'HSA_OVERRIDE_GFX_VERSION', 'HSA_ENABLE_SDMA', 'PYTHONPATH', 'PYTHONHOME', 'TMPDIR')
+    record = {'plan_id':plan['plan_id'], 'job_id':os.environ.get('SLURM_JOB_ID'),
+              'node':socket.gethostname(), 'pid':os.getpid(), 'state':'started',
+              'native_bootstrap_unmodified':True, 'native_checks_bypassed':False,
+              'environment_before_native_bootstrap':{key:os.environ.get(key) for key in keys},
+              'python':{'executable':sys.executable, 'prefix':sys.prefix,
+                        'base_prefix':sys.base_prefix, 'version':sys.version},
+              'physical_runtime_check_entered':False, 'epoch':time.time()}
+    original = binding.physical_runtime_devices
+
+    def capture(name, function):
+        try:
+            record[name] = {'value':function()}
+        except Exception as exc:
+            record[name] = {'error':repr(exc), 'traceback':traceback.format_exc()}
+
+    def torch_state():
+        import torch
+        record['torch'] = {'version':torch.__version__, 'hip':torch.version.hip,
+                           'cuda':torch.version.cuda, 'file':torch.__file__}
+        capture('cuda_is_available_after_native_check', lambda:bool(torch.cuda.is_available()))
+        capture('cuda_device_count_after_native_check', lambda:int(torch.cuda.device_count()))
+        capture('cuda_is_initialized_after_native_check', lambda:bool(torch.cuda.is_initialized()))
+
+    def observed_devices():
+        record['physical_runtime_check_entered'] = True
+        record['environment_after_native_mask_clear'] = {key:os.environ.get(key) for key in keys}
+        # The original check runs FIRST. Observational probes cannot make a failed
+        # native bootstrap succeed, replace its return, or change its exception.
+        try:
+            value = original()
+            record['physical_runtime_check_passed'] = True
+            return value
+        except BaseException as exc:
+            record.update(physical_runtime_check_passed=False, native_physical_error=repr(exc),
+                          native_physical_traceback=traceback.format_exc())
+            capture('torch_probe', torch_state)
+            def initialize_for_error_detail():
+                import torch
+                torch.cuda.init()
+                return 'succeeded_after_native_failure; original_failure_still_propagated'
+            capture('cuda_init_after_native_failure', initialize_for_error_detail)
+            raise
+        finally:
+            if record.get('physical_runtime_check_passed') is True:
+                capture('torch_probe', torch_state)
+
+    def device_records():
+        results = []
+        for path in [Path('/dev/kfd'), *sorted(Path('/dev/dri').glob('renderD*'))]:
+            entry = {'path':str(path), 'exists':path.exists(),
+                     'read_access':os.access(path,os.R_OK), 'write_access':os.access(path,os.W_OK)}
+            try:
+                info = path.stat()
+                entry.update(mode=oct(info.st_mode),uid=info.st_uid,gid=info.st_gid,
+                             device_major=os.major(info.st_rdev),device_minor=os.minor(info.st_rdev))
+            except OSError as exc:
+                entry['stat_error'] = repr(exc)
+            # No device writes: open/close reveals cgroup denials that os.access
+            # (Unix permission bits alone) cannot distinguish.
+            try:
+                fd = os.open(path,os.O_RDWR | os.O_CLOEXEC)
+                os.close(fd)
+                entry['open_readwrite_without_io'] = 'succeeded'
+            except OSError as exc:
+                entry['open_readwrite_without_io'] = repr(exc)
+            results.append(entry)
+        return results
+
+    binding.physical_runtime_devices = observed_devices
+    try:
+        mapping = binding.bootstrap(out/'mapping.json',expected_cpus=64,
+                                    expected_mem_gib=256,expected_seconds=600)
+        record.update(state='native_bootstrap_passed',mapping_id=mapping['mapping_id'])
+        return {'mapping_id':mapping['mapping_id'],'observation':str(out/'bootstrap-observation.json')}
+    except BaseException as exc:
+        record.update(state='native_bootstrap_failed',error=repr(exc),traceback=traceback.format_exc())
+        raise
+    finally:
+        binding.physical_runtime_devices = original
+        capture('cpu_affinity',lambda:sorted(os.sched_getaffinity(0)))
+        capture('process_groups',lambda:{'uid':os.getuid(),'gid':os.getgid(),'groups':os.getgroups()})
+        capture('device_files',device_records)
+        capture('cgroup',lambda:Path('/proc/self/cgroup').read_text())
+        capture('loaded_gpu_libraries',lambda:sorted({line.split()[-1]
+            for line in Path('/proc/self/maps').read_text().splitlines()
+            if any(name in line for name in ('libamdhip64','libhsa-runtime64','libtorch','libdrm'))}))
+        capture('pyvenv_cfg',lambda:(Path(sys.prefix)/'pyvenv.cfg').read_text())
+        record['finished_epoch'] = time.time()
+        publish(out/'bootstrap-observation.json',record)
 
 
 def rank_binding(plan):
@@ -390,7 +486,7 @@ def observe(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode',choices=('prepare','verify','submit','launch','rank','observe'))
+    parser.add_argument('mode',choices=('prepare','verify','submit','launch','bootstrap-observe','rank','observe'))
     parser.add_argument('--plan',type=Path)
     parser.add_argument('--output-root',type=Path,default=DEFAULT_OUT)
     args = parser.parse_args()
@@ -400,7 +496,8 @@ def main():
         require(args.plan is not None,'--plan required')
         if args.mode == 'verify':
             plan = verify(args.plan); value = {'valid':True,'plan_id':plan['plan_id']}
-        else: value = {'submit':submit,'launch':launch,'rank':rank,'observe':observe}[args.mode](args.plan)
+        else: value = {'submit':submit,'launch':launch,'bootstrap-observe':bootstrap_observe,
+                      'rank':rank,'observe':observe}[args.mode](args.plan)
     print(json.dumps(value,sort_keys=True,allow_nan=False),flush=True)
 
 
